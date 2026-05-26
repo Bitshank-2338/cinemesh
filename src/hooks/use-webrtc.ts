@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { WebRTCManager } from '@/lib/webrtc-manager'
 import type { RoomChannelAdapter } from '@/lib/channel'
 
 export type PeerConnectionState = RTCPeerConnectionState
 
 export interface WebRTCState {
-  remoteStreams:     Record<string, MediaStream>
-  connectionStates:  Record<string, PeerConnectionState>
+  remoteStreams:    Record<string, MediaStream>
+  connectionStates: Record<string, PeerConnectionState>
 }
 
 export function useWebRTC(
@@ -18,16 +18,11 @@ export function useWebRTC(
   localStream:  MediaStream | null,
   screenStream: MediaStream | null = null,
 ): WebRTCState {
-  const [remoteStreams,    setRemoteStreams]    = useState<Record<string, MediaStream>>({})
-  const [connectionStates, setConnectionStates] = useState<Record<string, PeerConnectionState>>({})
+  const [remoteStreams,     setRemoteStreams]     = useState<Record<string, MediaStream>>({})
+  const [connectionStates,  setConnectionStates]  = useState<Record<string, PeerConnectionState>>({})
+  const managerRef = useRef<WebRTCManager | null>(null)
 
-  const managerRef    = useRef<WebRTCManager | null>(null)
-  const localRef      = useRef(localStream)
-  const screenRef     = useRef(screenStream)
-  localRef.current    = localStream
-  screenRef.current   = screenStream
-
-  // ── Create manager when channel becomes available ───────────────────────
+  // ── Create / destroy manager when channel is available ───────────────────
   useEffect(() => {
     if (!channel) return
 
@@ -48,6 +43,7 @@ export function useWebRTC(
       setConnectionStates(prev => ({ ...prev, [peerId]: state }))
     })
 
+    // start() also connects to peers already present in the channel
     mgr.start(localStream)
     managerRef.current = mgr
 
@@ -57,29 +53,31 @@ export function useWebRTC(
       setRemoteStreams({})
       setConnectionStates({})
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, myId, myJoinedAt])
 
-  // ── Update camera tracks when local stream changes ────────────────────────
+  // ── Push camera stream changes to manager ────────────────────────────────
   useEffect(() => {
-    if (screenRef.current) return  // screen share is active — don't clobber with camera
+    // Don't clobber with camera while screen sharing
+    if (screenStream) return
     managerRef.current?.updateLocalStream(localStream)
-  }, [localStream])
+  }, [localStream, screenStream])
 
-  // ── Handle screen share: combine screen video + mic audio for peers ───────
+  // ── Handle screen share: screen video + mic audio ────────────────────────
   useEffect(() => {
     if (!managerRef.current) return
 
     if (screenStream) {
-      // Build a combined stream: screen video track + mic audio track
+      // Combine: screen video track + microphone audio track
       const combined = new MediaStream()
       screenStream.getVideoTracks().forEach(t => combined.addTrack(t))
-      localRef.current?.getAudioTracks().forEach(t => combined.addTrack(t))
+      localStream?.getAudioTracks().forEach(t => combined.addTrack(t))
       managerRef.current.updateLocalStream(combined)
     } else {
-      // Screen share stopped — restore camera stream
-      managerRef.current.updateLocalStream(localRef.current)
+      // Screen share stopped — restore camera
+      managerRef.current.updateLocalStream(localStream)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenStream])
 
   return { remoteStreams, connectionStates }

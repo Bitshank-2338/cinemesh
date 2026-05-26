@@ -1,124 +1,163 @@
 /**
- * WebRTCManager — manages a mesh of RTCPeerConnections.
+ * WebRTCManager — mesh of RTCPeerConnections.
  *
- * Each participant has a direct P2P connection with every other participant.
- * Uses the RoomChannelAdapter for signaling (offer/answer/ICE).
+ * Key design decisions:
  *
- * Negotiation rule (avoids glare):
- *   The participant with the LARGER joinedAt timestamp sends the offer.
- *   If joinedAt is identical, the LARGER participantId (lexicographic) offers.
+ * 1. currentStream (not a closure) — always tracks the latest local
+ *    stream so new peers and screen-share replacements all get the
+ *    right tracks.
+ *
+ * 2. presence-sync handled on start() — when we join a channel where
+ *    peers are ALREADY present, we connect to them immediately instead
+ *    of missing them because they arrived before our handler registered.
+ *
+ * 3. Glare prevention — higher joinedAt sends the offer; ties broken by
+ *    lexicographic participantId.
  */
 
 import type { RoomChannelAdapter, PresenceInfo, SignalPayload } from './channel/types'
 
-// ─── ICE Configuration ────────────────────────────────────────────────────────
+// ─── ICE configuration ────────────────────────────────────────────────────────
 function buildIceServers(): RTCIceServer[] {
   const servers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:global.stun.twilio.com:3478' },
   ]
-
-  // Optional TURN server from env
   const turnUrl  = process.env.NEXT_PUBLIC_TURN_URL
   const turnUser = process.env.NEXT_PUBLIC_TURN_USERNAME
   const turnCred = process.env.NEXT_PUBLIC_TURN_CREDENTIAL
   if (turnUrl && turnUser && turnCred) {
     servers.push({ urls: turnUrl, username: turnUser, credential: turnCred })
   }
-
   return servers
 }
 
-export type RemoteStreamHandler = (peerId: string, stream: MediaStream | null) => void
+export type RemoteStreamHandler    = (peerId: string, stream: MediaStream | null) => void
 export type ConnectionStateHandler = (peerId: string, state: RTCPeerConnectionState) => void
 
 export class WebRTCManager {
-  private peers = new Map<string, RTCPeerConnection>()
+  private peers         = new Map<string, RTCPeerConnection>()
   private remoteStreams = new Map<string, MediaStream>()
-  private unsubscribe: (() => void) | null = null
+  private unsubscribe:  (() => void) | null = null
 
-  private onRemoteStream: RemoteStreamHandler = () => {}
+  /** Always holds the currently-active local stream (camera OR screen+mic). */
+  private currentStream: MediaStream | null = null
+
+  private onRemoteStream:    RemoteStreamHandler    = () => {}
   private onConnectionState: ConnectionStateHandler = () => {}
 
   constructor(
-    private myId: string,
+    private myId:       string,
     private myJoinedAt: number,
-    private channel: RoomChannelAdapter
+    private channel:    RoomChannelAdapter,
   ) {}
 
-  setOnRemoteStream(fn: RemoteStreamHandler):  void { this.onRemoteStream   = fn }
-  setOnConnectionState(fn: ConnectionStateHandler): void { this.onConnectionState = fn }
+  setOnRemoteStream(fn: RemoteStreamHandler):        void { this.onRemoteStream    = fn }
+  setOnConnectionState(fn: ConnectionStateHandler):  void { this.onConnectionState = fn }
 
-  /** Start listening for signals. Call this once after channel.join(). */
+  /**
+   * Begin listening for signals and presence events.
+   * Also immediately connects to any peers already in the channel
+   * (they arrived before our handler registered, so we'd miss presence-join).
+   */
   start(localStream: MediaStream | null): void {
+    this.currentStream = localStream
+
     this.unsubscribe = this.channel.on((event) => {
-      if (event.kind === 'signal') this.handleSignal(event.signal, localStream)
-      if (event.kind === 'presence-join') this.onPeerJoined(event.participant, localStream)
+      if (event.kind === 'signal')        this.handleSignal(event.signal)
+      if (event.kind === 'presence-join') this.onPeerJoined(event.participant)
+      if (event.kind === 'presence-sync') this.onPresenceSync(event.presence)
       if (event.kind === 'presence-leave') this.closePeer(event.participantId)
     })
+
+    // ← connect to peers already present when we join
+    const existing = this.channel.getPresence()
+    for (const peer of Object.values(existing)) {
+      if (peer.participantId !== this.myId) {
+        this.onPeerJoined(peer)
+      }
+    }
   }
 
-  /** Call when local stream changes (e.g. camera toggled). */
+  /**
+   * Call whenever the local stream changes (camera on/off, screen share start/stop).
+   * Replaces tracks in all existing peer connections; new connections always use
+   * this.currentStream so screen share is included automatically.
+   */
   updateLocalStream(stream: MediaStream | null): void {
-    for (const [peerId, pc] of this.peers) {
-      const senders = pc.getSenders()
-      if (!stream) {
-        senders.forEach(s => s.track && pc.removeTrack(s))
-        return
-      }
-      const videoTrack = stream.getVideoTracks()[0]
-      const audioTrack = stream.getAudioTracks()[0]
+    this.currentStream = stream
 
-      const videoSender = senders.find(s => s.track?.kind === 'video')
-      const audioSender = senders.find(s => s.track?.kind === 'audio')
+    for (const [peerId, pc] of this.peers) {
+      if (!stream) {
+        pc.getSenders().forEach(s => s.track && pc.removeTrack(s))
+        continue
+      }
+
+      const senders    = pc.getSenders()
+      const videoTrack = stream.getVideoTracks()[0] ?? null
+      const audioTrack = stream.getAudioTracks()[0] ?? null
+
+      const videoSender = senders.find(s => s.track?.kind === 'video') ?? null
+      const audioSender = senders.find(s => s.track?.kind === 'audio') ?? null
 
       try {
         if (videoTrack && videoSender) {
-          videoSender.replaceTrack(videoTrack).catch(() => {/* ignore — peer may be closing */})
-        } else if (videoTrack) {
+          videoSender.replaceTrack(videoTrack).catch(() => {})
+        } else if (videoTrack && !videoSender) {
           pc.addTrack(videoTrack, stream)
-          this.renegotiate(peerId, pc, stream)
+          // onnegotiationneeded will handle re-offer automatically
         }
 
         if (audioTrack && audioSender) {
           audioSender.replaceTrack(audioTrack).catch(() => {})
-        } else if (audioTrack) {
+        } else if (audioTrack && !audioSender) {
           pc.addTrack(audioTrack, stream)
         }
-      } catch { /* ignore on closed connections */ }
+      } catch { /* ignore on closing connections */ }
+
+      void peerId // suppress unused-var lint
     }
   }
 
-  /** Initiate connection to a newly joined peer (if we should offer) */
-  private onPeerJoined(peer: PresenceInfo, localStream: MediaStream | null): void {
-    if (peer.participantId === this.myId) return
-    if (this.peers.has(peer.participantId)) return
+  // ─── Presence ─────────────────────────────────────────────────────────────
 
-    // Only the "later" joiner offers (to avoid glare)
-    const iShouldOffer = this.myJoinedAt > peer.joinedAt ||
+  /** Handle presence-join (new peer arrived after us). */
+  private onPeerJoined(peer: PresenceInfo): void {
+    if (peer.participantId === this.myId)          return
+    if (this.peers.has(peer.participantId))         return
+
+    const iShouldOffer =
+      this.myJoinedAt > peer.joinedAt ||
       (this.myJoinedAt === peer.joinedAt && this.myId > peer.participantId)
 
     if (iShouldOffer) {
-      this.createPeerAndOffer(peer.participantId, localStream)
+      this.createPeerAndOffer(peer.participantId)
     }
-    // else: wait for their offer
+    // else: wait — they will send the offer
   }
 
-  private async createPeerAndOffer(
-    peerId: string,
-    localStream: MediaStream | null
-  ): Promise<void> {
+  /** Handle presence-sync (full snapshot, fires on join and re-connects). */
+  private onPresenceSync(presence: Record<string, PresenceInfo>): void {
+    for (const peer of Object.values(presence)) {
+      if (peer.participantId !== this.myId && !this.peers.has(peer.participantId)) {
+        this.onPeerJoined(peer)
+      }
+    }
+  }
+
+  // ─── Signaling ────────────────────────────────────────────────────────────
+
+  private async createPeerAndOffer(peerId: string): Promise<void> {
     const pc = this.createPeerConnection(peerId)
 
-    if (localStream) {
-      localStream.getTracks().forEach(t => pc.addTrack(t, localStream))
+    if (this.currentStream) {
+      this.currentStream.getTracks().forEach(t => pc.addTrack(t, this.currentStream!))
     }
 
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
-
       this.channel.sendSignal({
         fromId: this.myId,
         toId:   peerId,
@@ -130,11 +169,7 @@ export class WebRTCManager {
     }
   }
 
-  private async handleSignal(
-    signal: SignalPayload,
-    localStream: MediaStream | null
-  ): Promise<void> {
-    // Ignore signals not addressed to us
+  private async handleSignal(signal: SignalPayload): Promise<void> {
     if (signal.toId !== this.myId) return
 
     const { fromId } = signal
@@ -144,18 +179,16 @@ export class WebRTCManager {
         let pc = this.peers.get(fromId)
         if (!pc) {
           pc = this.createPeerConnection(fromId)
-          if (localStream) {
-            localStream.getTracks().forEach(t => pc!.addTrack(t, localStream))
+          if (this.currentStream) {
+            this.currentStream.getTracks().forEach(t => pc!.addTrack(t, this.currentStream!))
           }
         }
-
         try {
           await pc.setRemoteDescription(
             new RTCSessionDescription(signal.data as RTCSessionDescriptionInit)
           )
           const answer = await pc.createAnswer()
           await pc.setLocalDescription(answer)
-
           this.channel.sendSignal({
             fromId: this.myId,
             toId:   fromId,
@@ -188,28 +221,28 @@ export class WebRTCManager {
         if (!pc || !signal.data) return
         try {
           await pc.addIceCandidate(new RTCIceCandidate(signal.data as RTCIceCandidateInit))
-        } catch { /* ignore benign ICE errors */ }
+        } catch { /* benign ICE errors */ }
         break
       }
 
-      case 'peer-leave': {
+      case 'peer-leave':
         this.closePeer(fromId)
         break
-      }
     }
   }
+
+  // ─── Peer connection factory ──────────────────────────────────────────────
 
   private createPeerConnection(peerId: string): RTCPeerConnection {
     const pc = new RTCPeerConnection({ iceServers: buildIceServers() })
     this.peers.set(peerId, pc)
 
-    // Collect remote tracks into a stream
     const remoteStream = new MediaStream()
     this.remoteStreams.set(peerId, remoteStream)
 
     pc.ontrack = (ev) => {
-      ev.streams[0]?.getTracks().forEach(t => {
-        // Replace existing track of same kind to avoid duplicates
+      const tracks = ev.streams[0]?.getTracks() ?? [ev.track]
+      tracks.forEach(t => {
         const existing = remoteStream.getTracks().find(x => x.kind === t.kind)
         if (existing) remoteStream.removeTrack(existing)
         remoteStream.addTrack(t)
@@ -234,7 +267,7 @@ export class WebRTCManager {
       }
     }
 
-    // Handle negotiation needed (for renegotiation after track changes)
+    // Renegotiation (e.g. after addTrack when stream wasn't ready at offer time)
     pc.onnegotiationneeded = async () => {
       if (pc.signalingState !== 'stable') return
       try {
@@ -250,24 +283,6 @@ export class WebRTCManager {
     }
 
     return pc
-  }
-
-  private async renegotiate(
-    peerId: string,
-    pc: RTCPeerConnection,
-    _stream: MediaStream
-  ): Promise<void> {
-    if (pc.signalingState !== 'stable') return
-    try {
-      const offer = await pc.createOffer()
-      await pc.setLocalDescription(offer)
-      this.channel.sendSignal({
-        fromId: this.myId,
-        toId: peerId,
-        type: 'offer',
-        data: pc.localDescription!.toJSON(),
-      })
-    } catch { /* ignore */ }
   }
 
   private closePeer(peerId: string): void {
@@ -288,10 +303,8 @@ export class WebRTCManager {
     return this.remoteStreams.get(peerId) ?? null
   }
 
-  /** Clean up everything */
   destroy(): void {
     this.unsubscribe?.()
-    // Signal peers we're leaving
     this.channel.sendSignal({
       fromId: this.myId,
       toId:   'all',
