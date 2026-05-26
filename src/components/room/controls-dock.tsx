@@ -217,15 +217,13 @@ export function ControlsDock({
           accent={isChatOpen}
           onClick={onToggleChat}
         />
-        {isPipSupported && (
-          <DockButton
-            icon={PictureInPicture2}
-            label={isPipOpen ? 'Floating' : 'Pop out'}
-            active={isPipOpen}
-            accent={isPipOpen}
-            onClick={onTogglePip}
-          />
-        )}
+        <DockButton
+          icon={PictureInPicture2}
+          label={isPipOpen ? 'Floating' : 'Float'}
+          active={isPipOpen}
+          accent={isPipOpen || !isPipSupported ? isPipOpen : false}
+          onClick={onTogglePip}
+        />
         <DockButton
           icon={Users}
           label={`${participantCount} here`}

@@ -337,6 +337,8 @@ export default function RoomPage() {
   // ── Floating PiP window (chat + cams in a separate OS window) ───────────
   const [isPipOpen, setIsPipOpen] = useState(false)
   const [pipSupported, setPipSupported] = useState(false)
+  const [showPipHint, setShowPipHint] = useState(false)
+  const pipHintDismissedRef = useRef(false)
   useEffect(() => { setPipSupported(isDocumentPipSupported()) }, [])
 
   // ── Media ───────────────────────────────────────────────────────────────
@@ -402,6 +404,16 @@ export default function RoomPage() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [media.isMicOn, media.isCameraOn])
+
+  // Auto-show floating-window hint the first time the user starts sharing
+  useEffect(() => {
+    if (media.isScreenSharing && !isPipOpen && !pipHintDismissedRef.current) {
+      setShowPipHint(true)
+    }
+    if (!media.isScreenSharing) {
+      setShowPipHint(false)
+    }
+  }, [media.isScreenSharing, isPipOpen])
 
   // Register participant row in DB; remove on unmount
   useEffect(() => {
@@ -634,6 +646,58 @@ export default function RoomPage() {
               isSynced={room.connected}
             />
           </div>
+
+          {/* Floating-window hint that appears once after screen sharing starts.
+              Click → opens the Document PiP (or popup fallback). The PiP window
+              floats above other browsers (Chrome/Edge), so you can watch the
+              movie in another window while still seeing chat + cams. */}
+          <AnimatePresence>
+            {showPipHint && (
+              <motion.div
+                key="pip-hint"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 max-w-md w-[92%]"
+              >
+                <div
+                  className="flex items-center gap-3 px-4 py-3 rounded-2xl shadow-2xl"
+                  style={{
+                    background:    'linear-gradient(135deg, rgba(201,168,76,0.18), rgba(59,130,246,0.14))',
+                    border:        '1px solid rgba(201,168,76,0.4)',
+                    backdropFilter: 'blur(20px)',
+                    boxShadow:     '0 20px 60px rgba(0,0,0,0.6), 0 0 40px rgba(201,168,76,0.18)',
+                  }}
+                >
+                  <div className="shrink-0 w-9 h-9 rounded-xl bg-[#c9a84c]/20 border border-[#c9a84c]/30 flex items-center justify-center">
+                    <span className="text-lg">📌</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-[#f0f0f4]">Pop chat + cams into a floating window?</p>
+                    <p className="text-xs text-[#9090a8] mt-0.5">
+                      {pipSupported
+                        ? 'Stays on top of every other app and is invisible in your screen share.'
+                        : 'Opens as a popup window you can drag to a corner of your screen.'}
+                    </p>
+                  </div>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => { setIsPipOpen(true); setShowPipHint(false); pipHintDismissedRef.current = true }}
+                  >
+                    Open
+                  </Button>
+                  <button
+                    onClick={() => { setShowPipHint(false); pipHintDismissedRef.current = true }}
+                    className="shrink-0 p-1.5 rounded-lg text-[#9090a8] hover:text-white hover:bg-white/10"
+                    title="Dismiss"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Controls dock */}
           <div className="shrink-0 pb-4">

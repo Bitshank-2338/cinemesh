@@ -8,6 +8,8 @@ interface PipWindowProps {
   onClose: () => void
   width?:  number
   height?: number
+  /** If true, fall back to window.open() when Document PiP isn't supported. */
+  allowPopupFallback?: boolean
   children: ReactNode
 }
 
@@ -38,18 +40,16 @@ export const isDocumentPipSupported = (): boolean =>
 export function PipWindow({
   open,
   onClose,
-  width  = 380,
-  height = 640,
+  width  = 400,
+  height = 680,
+  allowPopupFallback = true,
   children,
 }: PipWindowProps) {
   const [pipWindow, setPipWindow] = useState<Window | null>(null)
 
   useEffect(() => {
     if (!open) return
-    if (!isDocumentPipSupported()) {
-      onClose()
-      return
-    }
+    if (typeof window === 'undefined') return
 
     let cancelled    = false
     let opened: Window | null = null
@@ -59,32 +59,53 @@ export function PipWindow({
       onClose()
     }
 
+    const setupWindow = (w: Window) => {
+      // Copy parent document's stylesheets so Tailwind/fonts/theme variables work
+      document
+        .querySelectorAll('link[rel="stylesheet"], style')
+        .forEach(node => {
+          try { w.document.head.appendChild(node.cloneNode(true)) } catch {}
+        })
+      w.document.documentElement.style.colorScheme = 'dark'
+      w.document.body.style.cssText =
+        'margin:0;padding:0;background:#06060e;color:#f0f0f4;' +
+        'font-family:Inter,system-ui,-apple-system,sans-serif;' +
+        'overflow:hidden;'
+      w.document.title = 'CineMesh — Chat & Cams'
+      w.addEventListener('pagehide', closeHandler, { once: true })
+      w.addEventListener('beforeunload', closeHandler, { once: true })
+    }
+
     ;(async () => {
-      try {
-        const w = await window.documentPictureInPicture!.requestWindow({ width, height })
+      // ── Prefer Document Picture-in-Picture (always-on-top, Chromium 116+) ──
+      if (isDocumentPipSupported()) {
+        try {
+          const w = await window.documentPictureInPicture!.requestWindow({ width, height })
+          if (cancelled) { w.close(); return }
+          opened = w
+          setupWindow(w)
+          setPipWindow(w)
+          return
+        } catch (err) {
+          console.warn('[PiP] Document PiP failed, falling back to popup', err)
+          // fall through to window.open below
+        }
+      }
+
+      // ── Fallback: regular browser popup (NOT always-on-top, but still usable) ──
+      if (allowPopupFallback) {
+        const features = `popup=yes,width=${width},height=${height},left=${screen.availWidth - width - 20},top=80,menubar=no,toolbar=no,location=no,status=no`
+        const w = window.open('about:blank', 'cinemesh_pip', features)
+        if (!w) {
+          console.warn('[PiP] popup was blocked')
+          if (!cancelled) onClose()
+          return
+        }
         if (cancelled) { w.close(); return }
         opened = w
-
-        // Copy parent document's stylesheets/inline styles so Tailwind etc. work
-        document
-          .querySelectorAll('link[rel="stylesheet"], style')
-          .forEach(node => {
-            try { w.document.head.appendChild(node.cloneNode(true)) } catch {}
-          })
-
-        // Window baseline styles to match the app's dark theme
-        w.document.documentElement.style.colorScheme = 'dark'
-        w.document.body.style.cssText =
-          'margin:0;padding:0;background:#06060e;color:#f0f0f4;' +
-          'font-family:Inter,system-ui,-apple-system,sans-serif;' +
-          'overflow:hidden;'
-        w.document.title = 'CineMesh — Chat & Cams'
-
-        w.addEventListener('pagehide', closeHandler, { once: true })
-
+        setupWindow(w)
         setPipWindow(w)
-      } catch (err) {
-        console.warn('[PiP] requestWindow rejected', err)
+      } else {
         if (!cancelled) onClose()
       }
     })()
@@ -92,7 +113,7 @@ export function PipWindow({
     return () => {
       cancelled = true
       if (opened) {
-        opened.removeEventListener('pagehide', closeHandler)
+        try { opened.removeEventListener('pagehide', closeHandler) } catch {}
         try { opened.close() } catch {}
       }
       setPipWindow(null)
