@@ -1,0 +1,11 @@
+{
+  "colorGroups": [
+    {
+      "query": "tag:#community/Watch_Party_Core",
+      "color": {
+        "a": 1,
+        "rgb": 5142951
+      }
+    }
+  ]
+}

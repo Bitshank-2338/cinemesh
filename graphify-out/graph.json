@@ -1,0 +1,18 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "graphify_step2.py",
+      "file_type": "code",
+      "source_file": "graphify_step2.py",
+      "source_location": "L1",
+      "id": "graphify_step2_py",
+      "community": 0,
+      "norm_label": "graphify_step2.py"
+    }
+  ],
+  "links": [],
+  "hyperedges": []
+}
