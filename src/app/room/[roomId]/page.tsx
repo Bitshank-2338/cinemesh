@@ -136,15 +136,17 @@ function MainViewArea({
         </div>
       )}
 
-      {/* Fullscreen button (hidden while in fullscreen — overlay has its own) */}
+      {/* Fullscreen button — always visible when a screen is shared.
+          Touch devices have no hover; opacity-only was invisible there. */}
       {screenStream && !isFullscreen && (
         <button
           onClick={toggleFullscreen}
-          className="absolute top-3 right-3 p-2 rounded-lg text-white opacity-0 group-hover:opacity-100 transition-opacity z-10"
-          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
-          title="Fullscreen"
+          className="absolute top-3 right-3 p-2.5 rounded-xl text-white z-10 flex items-center gap-2 transition-transform hover:scale-105"
+          style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.08)' }}
+          title="Enter fullscreen (cam strip + chat overlay)"
         >
           <Maximize2 className="w-4 h-4" />
+          <span className="text-xs font-semibold hidden sm:inline">Fullscreen</span>
         </button>
       )}
 

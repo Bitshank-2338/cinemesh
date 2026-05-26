@@ -57,6 +57,15 @@ export class WebRTCManager {
    */
   private pendingTracks = new Map<string, Map<string, MediaStream>>()
 
+  /**
+   * Pending close timers. Supabase Realtime fires `leave` + `join` on every
+   * presence track() update (e.g., mic toggle) — closing the peer immediately
+   * would tear down WebRTC on every state change. We delay the close so a
+   * quick re-join cancels it.
+   */
+  private pendingClose = new Map<string, ReturnType<typeof setTimeout>>()
+  private static readonly CLOSE_GRACE_MS = 4000
+
   private unsubscribe: (() => void) | null = null
 
   /** Local streams (stable IDs so peers can match across renegotiations). */
@@ -82,10 +91,25 @@ export class WebRTCManager {
     this.screenStream = screenStream
 
     this.unsubscribe = this.channel.on((event) => {
-      if (event.kind === 'signal')         this.handleSignal(event.signal)
-      if (event.kind === 'presence-join')  this.onPeerJoined(event.participant)
-      if (event.kind === 'presence-sync')  this.onPresenceSync(event.presence)
-      if (event.kind === 'presence-leave') this.closePeer(event.participantId)
+      if (event.kind === 'signal') this.handleSignal(event.signal)
+
+      if (event.kind === 'presence-join') {
+        // Re-join cancels any pending close from a recent leave
+        this.cancelPendingClose(event.participant.participantId)
+        this.onPeerJoined(event.participant)
+      }
+
+      if (event.kind === 'presence-sync') {
+        // Anyone still in presence is NOT actually gone — cancel pending closes
+        for (const p of Object.values(event.presence)) {
+          if (p.participantId !== this.myId) this.cancelPendingClose(p.participantId)
+        }
+        this.onPresenceSync(event.presence)
+      }
+
+      if (event.kind === 'presence-leave') {
+        this.schedulePendingClose(event.participantId)
+      }
     })
 
     // Connect to any peers already present when we join
@@ -97,6 +121,10 @@ export class WebRTCManager {
 
   destroy(): void {
     this.unsubscribe?.()
+    // Cancel any pending close timers — closePeer below will tear everything down
+    for (const t of this.pendingClose.values()) clearTimeout(t)
+    this.pendingClose.clear()
+
     this.channel.sendSignal({
       fromId: this.myId,
       toId:   'all',
@@ -446,7 +474,35 @@ export class WebRTCManager {
     return pc
   }
 
+  /**
+   * Schedule a peer to be closed in CLOSE_GRACE_MS. Supabase Realtime emits
+   * spurious presence-leave events when a peer just updates their state
+   * (mic/cam toggle); a quick presence-sync or presence-join arriving within
+   * the grace window cancels the close.
+   */
+  private schedulePendingClose(peerId: string): void {
+    if (this.pendingClose.has(peerId)) return  // already scheduled
+    const timer = setTimeout(() => {
+      this.pendingClose.delete(peerId)
+      // Final verification — is the peer truly gone from current presence?
+      const current = this.channel.getPresence()
+      if (!current[peerId]) {
+        this.closePeer(peerId)
+      }
+    }, WebRTCManager.CLOSE_GRACE_MS)
+    this.pendingClose.set(peerId, timer)
+  }
+
+  private cancelPendingClose(peerId: string): void {
+    const timer = this.pendingClose.get(peerId)
+    if (timer != null) {
+      clearTimeout(timer)
+      this.pendingClose.delete(peerId)
+    }
+  }
+
   private closePeer(peerId: string): void {
+    this.cancelPendingClose(peerId)
     const pc = this.peers.get(peerId)
     if (pc) {
       pc.ontrack = null
