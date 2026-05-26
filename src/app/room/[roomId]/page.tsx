@@ -16,6 +16,8 @@ import type { ChatPayload } from '@/lib/channel'
 import { ControlsDock } from '@/components/room/controls-dock'
 import { ChatPanel } from '@/components/room/chat-panel'
 import { ParticipantTile } from '@/components/room/participant-tile'
+import { PipWindow, isDocumentPipSupported } from '@/components/room/pip-window'
+import { PipBody } from '@/components/room/pip-body'
 import { PlaybackSyncBar } from '@/components/room/playback-sync-bar'
 import { InviteModal } from '@/components/room/invite-modal'
 import { SettingsModal } from '@/components/room/settings-modal'
@@ -332,6 +334,11 @@ export default function RoomPage() {
     setRoom, toggleChat, toggleSettings, toggleInvite, clearRoom,
   } = useRoomStore()
 
+  // ── Floating PiP window (chat + cams in a separate OS window) ───────────
+  const [isPipOpen, setIsPipOpen] = useState(false)
+  const [pipSupported, setPipSupported] = useState(false)
+  useEffect(() => { setPipSupported(isDocumentPipSupported()) }, [])
+
   // ── Media ───────────────────────────────────────────────────────────────
   const media = useLocalMedia()
 
@@ -635,16 +642,15 @@ export default function RoomPage() {
               isCameraOn={media.isCameraOn}
               isScreenSharing={media.isScreenSharing}
               isChatOpen={isChatOpen}
+              isPipOpen={isPipOpen}
+              isPipSupported={pipSupported}
               participantCount={room.participants.length}
               roomCode={roomId as string}
-              onToggleMic={() => {
-                media.toggleMic()
-              }}
-              onToggleCamera={() => {
-                media.toggleCamera()
-              }}
+              onToggleMic={() => media.toggleMic()}
+              onToggleCamera={() => media.toggleCamera()}
               onToggleScreenShare={handleScreenShare}
               onToggleChat={toggleChat}
+              onTogglePip={() => setIsPipOpen(v => !v)}
               onLeave={handleLeave}
               onOpenSettings={toggleSettings}
               onOpenInvite={toggleInvite}
@@ -693,6 +699,31 @@ export default function RoomPage() {
           <SettingsModal onClose={toggleSettings} />
         )}
       </AnimatePresence>
+
+      {/* ── Floating Picture-in-Picture window ─────────────────────
+          Renders to a separate OS-level always-on-top window
+          (Chromium 116+). Since it's outside any browser, it does
+          NOT show up in getDisplayMedia screen captures and floats
+          above other apps so users can chat while watching the movie
+          in a different browser/app. */}
+      <PipWindow
+        open={isPipOpen}
+        onClose={() => setIsPipOpen(false)}
+        width={400}
+        height={680}
+      >
+        <PipBody
+          localParticipant={localParticipant}
+          remoteParticipants={remoteParticipants}
+          localCamStream={media.localStream}
+          remoteCameras={webrtc.remoteCameras}
+          connectionStates={webrtc.connectionStates}
+          messages={room.messages}
+          onSend={room.sendMessage}
+          localParticipantId={participantId}
+          onPopBack={() => setIsPipOpen(false)}
+        />
+      </PipWindow>
     </div>
   )
 }

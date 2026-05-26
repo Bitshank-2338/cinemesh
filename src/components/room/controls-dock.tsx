@@ -10,8 +10,9 @@ import {
   Users,
   Settings,
   LogOut,
-  Copy, Check,
+  Check,
   Link2,
+  PictureInPicture2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/utils'
@@ -21,12 +22,15 @@ interface ControlsDockProps {
   isCameraOn: boolean
   isScreenSharing: boolean
   isChatOpen: boolean
+  isPipOpen: boolean
+  isPipSupported: boolean
   participantCount: number
   roomCode: string
   onToggleMic: () => void
   onToggleCamera: () => void
   onToggleScreenShare: () => void
   onToggleChat: () => void
+  onTogglePip: () => void
   onLeave: () => void
   onOpenSettings: () => void
   onOpenInvite: () => void
@@ -137,12 +141,15 @@ export function ControlsDock({
   isCameraOn,
   isScreenSharing,
   isChatOpen,
+  isPipOpen,
+  isPipSupported,
   participantCount,
   roomCode,
   onToggleMic,
   onToggleCamera,
   onToggleScreenShare,
   onToggleChat,
+  onTogglePip,
   onLeave,
   onOpenSettings,
   onOpenInvite,
@@ -210,6 +217,15 @@ export function ControlsDock({
           accent={isChatOpen}
           onClick={onToggleChat}
         />
+        {isPipSupported && (
+          <DockButton
+            icon={PictureInPicture2}
+            label={isPipOpen ? 'Floating' : 'Pop out'}
+            active={isPipOpen}
+            accent={isPipOpen}
+            onClick={onTogglePip}
+          />
+        )}
         <DockButton
           icon={Users}
           label={`${participantCount} here`}
