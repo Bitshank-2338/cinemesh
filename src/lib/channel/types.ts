@@ -29,13 +29,28 @@ export interface SyncPayload {
 }
 
 // ─── WebRTC Signaling ─────────────────────────────────────────────────────────
-export type SignalType = 'offer' | 'answer' | 'ice-candidate' | 'peer-leave'
+export type SignalType = 'offer' | 'answer' | 'ice-candidate' | 'peer-leave' | 'stream-roles'
+
+/**
+ * Stream-role mapping announcement. Tells peers which of the sender's
+ * MediaStream IDs is the camera vs the screen share. Sent over the channel
+ * any time the sender's local streams change so receivers can correctly
+ * route incoming tracks to camera/screen UI slots.
+ */
+export interface StreamRolesPayload {
+  cameraStreamId: string | null
+  screenStreamId: string | null
+}
 
 export interface SignalPayload {
   fromId: string
   toId: string
   type: SignalType
-  data: RTCSessionDescriptionInit | RTCIceCandidateInit | null
+  data:
+    | RTCSessionDescriptionInit
+    | RTCIceCandidateInit
+    | StreamRolesPayload
+    | null
 }
 
 // ─── Channel Events ───────────────────────────────────────────────────────────

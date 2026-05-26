@@ -7,7 +7,10 @@ import type { RoomChannelAdapter } from '@/lib/channel'
 export type PeerConnectionState = RTCPeerConnectionState
 
 export interface WebRTCState {
-  remoteStreams:    Record<string, MediaStream>
+  /** Remote camera/voice streams (one per peer). */
+  remoteCameras:    Record<string, MediaStream>
+  /** Remote screen-share streams (only present while a peer shares). */
+  remoteScreens:    Record<string, MediaStream>
   connectionStates: Record<string, PeerConnectionState>
 }
 
@@ -15,21 +18,23 @@ export function useWebRTC(
   myId:         string,
   myJoinedAt:   number,
   channel:      RoomChannelAdapter | null,
-  localStream:  MediaStream | null,
+  cameraStream: MediaStream | null,
   screenStream: MediaStream | null = null,
 ): WebRTCState {
-  const [remoteStreams,     setRemoteStreams]     = useState<Record<string, MediaStream>>({})
-  const [connectionStates,  setConnectionStates]  = useState<Record<string, PeerConnectionState>>({})
+  const [remoteCameras,    setRemoteCameras]    = useState<Record<string, MediaStream>>({})
+  const [remoteScreens,    setRemoteScreens]    = useState<Record<string, MediaStream>>({})
+  const [connectionStates, setConnectionStates] = useState<Record<string, PeerConnectionState>>({})
   const managerRef = useRef<WebRTCManager | null>(null)
 
-  // ── Create / destroy manager when channel is available ───────────────────
+  // Create/destroy manager when channel becomes available
   useEffect(() => {
     if (!channel) return
 
     const mgr = new WebRTCManager(myId, myJoinedAt, channel)
 
-    mgr.setOnRemoteStream((peerId, stream) => {
-      setRemoteStreams(prev => {
+    mgr.setOnRemoteStream((peerId, slot, stream) => {
+      const setter = slot === 'camera' ? setRemoteCameras : setRemoteScreens
+      setter(prev => {
         if (!stream) {
           const next = { ...prev }
           delete next[peerId]
@@ -43,42 +48,28 @@ export function useWebRTC(
       setConnectionStates(prev => ({ ...prev, [peerId]: state }))
     })
 
-    // start() also connects to peers already present in the channel
-    mgr.start(localStream)
+    mgr.start(cameraStream, screenStream)
     managerRef.current = mgr
 
     return () => {
       mgr.destroy()
       managerRef.current = null
-      setRemoteStreams({})
+      setRemoteCameras({})
+      setRemoteScreens({})
       setConnectionStates({})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, myId, myJoinedAt])
 
-  // ── Push camera stream changes to manager ────────────────────────────────
+  // Push camera changes to manager
   useEffect(() => {
-    // Don't clobber with camera while screen sharing
-    if (screenStream) return
-    managerRef.current?.updateLocalStream(localStream)
-  }, [localStream, screenStream])
+    managerRef.current?.setCameraStream(cameraStream)
+  }, [cameraStream])
 
-  // ── Handle screen share: screen video + mic audio ────────────────────────
+  // Push screen changes to manager
   useEffect(() => {
-    if (!managerRef.current) return
-
-    if (screenStream) {
-      // Combine: screen video track + microphone audio track
-      const combined = new MediaStream()
-      screenStream.getVideoTracks().forEach(t => combined.addTrack(t))
-      localStream?.getAudioTracks().forEach(t => combined.addTrack(t))
-      managerRef.current.updateLocalStream(combined)
-    } else {
-      // Screen share stopped — restore camera
-      managerRef.current.updateLocalStream(localStream)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    managerRef.current?.setScreenStream(screenStream)
   }, [screenStream])
 
-  return { remoteStreams, connectionStates }
+  return { remoteCameras, remoteScreens, connectionStates }
 }

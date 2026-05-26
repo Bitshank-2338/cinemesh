@@ -113,11 +113,23 @@ export const MediaManager = {
       return { stream: null, error: 'not-supported' }
     }
     try {
+      // Higher framerate for movie playback; request tab/system audio.
+      // Chrome's share dialog will show a "Share tab audio" checkbox when
+      // the user picks a tab — that's how the movie sound gets transmitted.
       const stream = await (navigator.mediaDevices as MediaDevices & {
         getDisplayMedia(c?: DisplayMediaStreamOptions): Promise<MediaStream>
       }).getDisplayMedia({
-        video: { frameRate: { ideal: 15 } },
-        audio: true,
+        video: {
+          frameRate: { ideal: 30, max: 60 },
+          width:     { ideal: 1920 },
+          height:    { ideal: 1080 },
+        },
+        audio: {
+          echoCancellation: false,    // movie audio should not be filtered
+          noiseSuppression: false,
+          autoGainControl:  false,
+          sampleRate:       { ideal: 48000 },
+        } as MediaTrackConstraints,
       })
       return { stream, error: null }
     } catch (err) {

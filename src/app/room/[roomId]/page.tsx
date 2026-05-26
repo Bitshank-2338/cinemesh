@@ -4,13 +4,14 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useRouter, useParams, useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { nanoid } from 'nanoid'
-import { Film, Wifi, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react'
+import { Film, Wifi, WifiOff, AlertTriangle, RefreshCw, Maximize2, Minimize2, MessageSquare, X } from 'lucide-react'
 
 import { useRoomStore } from '@/store/room-store'
 import { useLocalMedia } from '@/hooks/use-local-media'
 import { upsertParticipant, removeParticipant, updateParticipantPresence } from '@/lib/room-service'
 import { useRoomChannel } from '@/hooks/use-room-channel'
-import { useWebRTC } from '@/hooks/use-webrtc'
+import { useWebRTC, type PeerConnectionState } from '@/hooks/use-webrtc'
+import type { ChatPayload } from '@/lib/channel'
 
 import { ControlsDock } from '@/components/room/controls-dock'
 import { ChatPanel } from '@/components/room/chat-panel'
@@ -29,54 +30,88 @@ interface PlaybackState {
   lastSyncedAt: number
 }
 
-// ─── Main video area ──────────────────────────────────────────────────────────
+// ─── Main video area (screen share + fullscreen overlay) ─────────────────────
+interface MainViewAreaProps {
+  screenStream:        MediaStream | null
+  /** True when LOCAL user is the one sharing (we must mute to avoid echo) */
+  isLocalShare:        boolean
+  sharerName:          string | null
+  isPlaying:           boolean
+  onTogglePlay:        () => void
+  /** Whether the chat panel is open in the SIDE layout (passed for overlay) */
+  isChatOpen:          boolean
+  /** Overlay slot: rendered on top of the video when fullscreen */
+  fullscreenOverlay?:  React.ReactNode
+  onFullscreenChange?: (isFs: boolean) => void
+}
+
 function MainViewArea({
   screenStream,
-  isPlaying,
+  isLocalShare,
+  sharerName,
+  isPlaying: _isPlaying,
   onTogglePlay,
-}: {
-  screenStream: MediaStream | null
-  isPlaying: boolean
-  onTogglePlay: () => void
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [showControls, setShowControls] = useState(false)
+  fullscreenOverlay,
+  onFullscreenChange,
+}: MainViewAreaProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const videoRef     = useRef<HTMLVideoElement>(null)
+  const [isFullscreen, setIsFullscreen] = useState(false)
 
+  // Attach stream
   useEffect(() => {
     const el = videoRef.current
     if (!el || !screenStream) return
     el.srcObject = screenStream
+    el.muted = isLocalShare  // mute only local to avoid echo; remote should be audible
     el.play().catch(() => {})
     return () => { el.srcObject = null }
-  }, [screenStream])
+  }, [screenStream, isLocalShare])
+
+  // Detect fullscreen state on this container
+  useEffect(() => {
+    const handler = () => {
+      const fs = document.fullscreenElement === containerRef.current
+      setIsFullscreen(fs)
+      onFullscreenChange?.(fs)
+    }
+    document.addEventListener('fullscreenchange', handler)
+    return () => document.removeEventListener('fullscreenchange', handler)
+  }, [onFullscreenChange])
+
+  const toggleFullscreen = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    if (document.fullscreenElement === el) {
+      document.exitFullscreen().catch(() => {})
+    } else {
+      el.requestFullscreen().catch(() => {})
+    }
+  }, [])
 
   return (
     <div
-      className="relative w-full h-full rounded-2xl overflow-hidden cursor-pointer group"
+      ref={containerRef}
+      className="relative w-full h-full rounded-2xl overflow-hidden group"
       style={{
         background: 'rgba(4,4,12,1)',
         border: '1px solid rgba(255,255,255,0.07)',
         boxShadow: '0 8px 40px rgba(0,0,0,0.8)',
       }}
-      onMouseEnter={() => setShowControls(true)}
-      onMouseLeave={() => setShowControls(false)}
-      onClick={onTogglePlay}
     >
       {screenStream ? (
-        /* Screen share feed */
         <video
           ref={videoRef}
           autoPlay
           playsInline
-          muted
-          className="absolute inset-0 w-full h-full object-contain"
+          // muted is set imperatively in the effect so we don't fight React
+          className="absolute inset-0 w-full h-full object-contain bg-black"
+          onClick={onTogglePlay}
         />
       ) : (
-        /* Placeholder */
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4"
           style={{ background: 'linear-gradient(135deg, #0a1228 0%, #080618 40%, #0c0810 100%)' }}
         >
-          {/* Film grain */}
           <div className="absolute inset-0 opacity-10"
             style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")` }}
           />
@@ -86,12 +121,35 @@ function MainViewArea({
               <Film className="w-8 h-8 text-[#3a3a50]" />
             </div>
             <p className="text-[#5a5a72] font-medium text-sm">No screen shared</p>
-            <p className="text-[#3a3a50] text-xs max-w-[200px] mx-auto leading-relaxed">
-              Click "Share" in the dock to share your screen with everyone
+            <p className="text-[#3a3a50] text-xs max-w-[240px] mx-auto leading-relaxed">
+              Click &ldquo;Share&rdquo; in the dock to share your screen — or wait for someone else to share.
             </p>
           </div>
         </div>
       )}
+
+      {/* Sharer label */}
+      {screenStream && sharerName && !isFullscreen && (
+        <div className="absolute top-3 left-3 px-2.5 py-1 rounded-lg text-xs font-medium z-10"
+          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)', color: '#f0f0f4' }}>
+          {sharerName} is sharing
+        </div>
+      )}
+
+      {/* Fullscreen button (hidden while in fullscreen — overlay has its own) */}
+      {screenStream && !isFullscreen && (
+        <button
+          onClick={toggleFullscreen}
+          className="absolute top-3 right-3 p-2 rounded-lg text-white opacity-0 group-hover:opacity-100 transition-opacity z-10"
+          style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+          title="Fullscreen"
+        >
+          <Maximize2 className="w-4 h-4" />
+        </button>
+      )}
+
+      {/* Fullscreen overlay: cam strip + chat */}
+      {isFullscreen && fullscreenOverlay}
 
       <ScanLine />
     </div>
@@ -120,6 +178,132 @@ function ConnectionBanner({ error, onRetry }: { error: string; onRetry: () => vo
       </button>
     </motion.div>
   )
+}
+
+// ─── Fullscreen overlay: cam strip + collapsible chat ─────────────────────────
+interface FullscreenOverlayProps {
+  localParticipant:   RoomParticipantLike
+  remoteParticipants: RoomParticipantLike[]
+  localCamStream:     MediaStream | null
+  remoteCameras:      Record<string, MediaStream>
+  connectionStates:   Record<string, PeerConnectionState>
+  messages:           ChatPayload[]
+  onSend:             (s: string) => void
+  localParticipantId: string
+}
+
+function FullscreenOverlay({
+  localParticipant,
+  remoteParticipants,
+  localCamStream,
+  remoteCameras,
+  connectionStates,
+  messages,
+  onSend,
+  localParticipantId,
+}: FullscreenOverlayProps) {
+  const [chatOpen, setChatOpen] = useState(false)
+  const [unread, setUnread] = useState(0)
+  const lastSeenLen = useRef(messages.length)
+
+  // Track unread while chat is closed
+  useEffect(() => {
+    if (chatOpen) {
+      setUnread(0)
+      lastSeenLen.current = messages.length
+    } else {
+      setUnread(messages.length - lastSeenLen.current)
+    }
+  }, [messages.length, chatOpen])
+
+  const exitFs = () => document.exitFullscreen().catch(() => {})
+
+  return (
+    <>
+      {/* Top-right: exit fullscreen */}
+      <button
+        onClick={exitFs}
+        className="absolute top-3 right-3 p-2 rounded-lg z-30 text-white"
+        style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+        title="Exit fullscreen"
+      >
+        <Minimize2 className="w-4 h-4" />
+      </button>
+
+      {/* Top-left: chat toggle */}
+      <button
+        onClick={() => setChatOpen(v => !v)}
+        className="absolute top-3 left-3 p-2 rounded-lg z-30 text-white flex items-center gap-2"
+        style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+      >
+        <MessageSquare className="w-4 h-4" />
+        <span className="text-xs font-medium">{chatOpen ? 'Hide chat' : 'Chat'}</span>
+        {!chatOpen && unread > 0 && (
+          <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#c9a84c] text-[#0a0808]">
+            {unread}
+          </span>
+        )}
+      </button>
+
+      {/* Cam strip — bottom right column of small tiles */}
+      <div className="absolute bottom-3 right-3 w-[160px] flex flex-col gap-2 z-20 max-h-[80vh] overflow-y-auto">
+        <ParticipantTile
+          participant={localParticipant}
+          stream={localCamStream}
+          isLocal
+          size="sm"
+        />
+        {remoteParticipants.map(p => (
+          <ParticipantTile
+            key={p.participantId}
+            participant={p}
+            stream={remoteCameras[p.participantId] ?? null}
+            connectionState={connectionStates[p.participantId]}
+            size="sm"
+          />
+        ))}
+      </div>
+
+      {/* Chat panel — slides in from the left when chatOpen */}
+      <AnimatePresence>
+        {chatOpen && (
+          <motion.div
+            initial={{ x: -340, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -340, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 36 }}
+            className="absolute top-0 bottom-0 left-0 w-[320px] z-20 flex flex-col"
+            style={{
+              background:    'rgba(8,8,20,0.92)',
+              backdropFilter: 'blur(20px)',
+              borderRight:    '1px solid rgba(255,255,255,0.07)',
+            }}
+          >
+            {/* Make room for the top-left chat toggle button */}
+            <div className="h-14 shrink-0" />
+            <div className="flex-1 overflow-hidden">
+              <ChatPanel
+                messages={messages}
+                onSend={onSend}
+                onClose={() => setChatOpen(false)}
+                localParticipantId={localParticipantId}
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  )
+}
+
+// Minimal type used by overlay; matches RoomParticipant from use-room-channel
+type RoomParticipantLike = {
+  participantId: string
+  name:          string
+  isMuted:       boolean
+  isCameraOff:   boolean
+  isHost:        boolean
+  joinedAt:      number
 }
 
 // ─── Room page ────────────────────────────────────────────────────────────────
@@ -271,9 +455,24 @@ export default function RoomPage() {
     joinedAt,
   }
 
-  const activeScreenStream = media.isScreenSharing
-    ? media.screenStream
-    : null
+  // ── Pick the active screen to display in the main view ──────────────────
+  // Priority: 1) someone remote is sharing → show theirs (with audio);
+  //           2) we are sharing → show local preview (muted to avoid echo);
+  //           3) nothing.
+  const remoteScreenEntry = useMemo(() => {
+    for (const p of remoteParticipants) {
+      const s = webrtc.remoteScreens[p.participantId]
+      if (s) return { stream: s, name: p.name, isLocal: false }
+    }
+    return null
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webrtc.remoteScreens, remoteParticipants])
+
+  const activeScreen: { stream: MediaStream; name: string; isLocal: boolean } | null =
+    remoteScreenEntry ??
+    (media.isScreenSharing && media.screenStream
+      ? { stream: media.screenStream, name: 'You', isLocal: true }
+      : null)
 
   return (
     <div className="relative flex flex-col h-screen overflow-hidden bg-[#06060e]">
@@ -365,15 +564,30 @@ export default function RoomPage() {
             {/* Main view (screen share or placeholder) */}
             <div className="flex-1 min-w-0">
               <MainViewArea
-                screenStream={activeScreenStream}
+                screenStream={activeScreen?.stream ?? null}
+                isLocalShare={activeScreen?.isLocal ?? false}
+                sharerName={activeScreen?.name ?? null}
                 isPlaying={playback.isPlaying}
                 onTogglePlay={handleTogglePlay}
+                isChatOpen={isChatOpen}
+                fullscreenOverlay={
+                  <FullscreenOverlay
+                    localParticipant={localParticipant}
+                    remoteParticipants={remoteParticipants}
+                    localCamStream={media.localStream}
+                    remoteCameras={webrtc.remoteCameras}
+                    connectionStates={webrtc.connectionStates}
+                    messages={room.messages}
+                    onSend={room.sendMessage}
+                    localParticipantId={participantId}
+                  />
+                }
               />
             </div>
 
             {/* Participant strip */}
             <div className="w-[130px] flex flex-col gap-2 overflow-y-auto shrink-0">
-              {/* Local tile */}
+              {/* Local tile — always camera, never screen */}
               <ParticipantTile
                 participant={localParticipant}
                 stream={media.localStream}
@@ -381,7 +595,7 @@ export default function RoomPage() {
                 size="sm"
               />
 
-              {/* Remote tiles */}
+              {/* Remote tiles — always show their camera */}
               <AnimatePresence>
                 {remoteParticipants.map(p => (
                   <motion.div
@@ -392,7 +606,7 @@ export default function RoomPage() {
                   >
                     <ParticipantTile
                       participant={p}
-                      stream={webrtc.remoteStreams[p.participantId] ?? null}
+                      stream={webrtc.remoteCameras[p.participantId] ?? null}
                       connectionState={webrtc.connectionStates[p.participantId]}
                       size="sm"
                     />
