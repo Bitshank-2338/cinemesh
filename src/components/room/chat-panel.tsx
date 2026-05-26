@@ -2,10 +2,12 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, X, Smile, Hash, Sticker } from 'lucide-react'
+import { Send, X, Smile, Hash, Sticker, Languages } from 'lucide-react'
 import type { ChatPayload as ChatMessage } from '@/lib/channel'
 import { cn } from '@/lib/utils'
 import { fadeUp } from '@/lib/motion'
+import { LANGUAGES } from '@/lib/translation'
+import { useTargetLanguage, useTranslatedText } from '@/hooks/use-translation'
 
 interface ChatPanelProps {
   messages: ChatMessage[]
@@ -78,15 +80,21 @@ function isStickerMessage(content: string): boolean {
 function MessageBubble({
   message,
   isLocal,
+  targetLang,
 }: {
-  message: ChatMessage
-  isLocal: boolean
+  message:    ChatMessage
+  isLocal:    boolean
+  targetLang: string
 }) {
   const color  = getMessageColor(message.participantId, isLocal)
   const sticker = isStickerMessage(message.content)
   const content = message.content.startsWith('STK:')
     ? message.content.slice(4)
     : message.content
+
+  // Only translate REMOTE non-sticker messages
+  const shouldTranslate = !isLocal && !sticker && !!targetLang
+  const translated = useTranslatedText(shouldTranslate ? content : '', shouldTranslate ? targetLang : '')
 
   if (message.type === 'system') {
     return (
@@ -123,19 +131,45 @@ function MessageBubble({
             {content}
           </span>
         ) : (
-          <div
-            className={cn(
-              'px-3 py-2 rounded-2xl text-sm leading-relaxed',
-              isLocal ? 'rounded-tr-sm' : 'rounded-tl-sm',
+          <>
+            {/* Translated text (primary, on top) */}
+            {translated && (
+              <div
+                className={cn(
+                  'px-3 py-2 rounded-2xl text-sm leading-relaxed',
+                  isLocal ? 'rounded-tr-sm' : 'rounded-tl-sm',
+                )}
+                style={{
+                  background: 'rgba(59,130,246,0.10)',
+                  border:     '1px solid rgba(59,130,246,0.22)',
+                  color:      '#e0e0ec',
+                }}
+              >
+                {translated}
+              </div>
             )}
-            style={{
-              background: isLocal ? 'rgba(201,168,76,0.1)' : 'rgba(255,255,255,0.05)',
-              border:     `1px solid ${isLocal ? 'rgba(201,168,76,0.15)' : 'rgba(255,255,255,0.07)'}`,
-              color:      '#e0e0ec',
-            }}
-          >
-            {content}
-          </div>
+            {/* Original — dimmer if translated above */}
+            <div
+              className={cn(
+                'px-3 py-2 rounded-2xl text-sm leading-relaxed',
+                isLocal ? 'rounded-tr-sm' : 'rounded-tl-sm',
+                translated && 'mt-1',
+              )}
+              style={{
+                background: isLocal
+                  ? 'rgba(201,168,76,0.1)'
+                  : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${isLocal ? 'rgba(201,168,76,0.15)' : 'rgba(255,255,255,0.07)'}`,
+                color:  translated ? '#7a7a92' : '#e0e0ec',
+                fontSize: translated ? '11px' : undefined,
+              }}
+            >
+              {translated && (
+                <span className="text-[9px] text-[#5a5a72] mr-1.5 font-semibold">orig:</span>
+              )}
+              {content}
+            </div>
+          </>
         )}
       </div>
     </motion.div>
@@ -219,8 +253,12 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [input, setInput] = useState('')
   const [picker, setPicker] = useState<'emoji' | 'sticker' | null>(null)
+  const [langOpen, setLangOpen] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef  = useRef<HTMLInputElement>(null)
+
+  const { target: targetLang, setTarget: setTargetLang } = useTargetLanguage()
+  const activeLang = LANGUAGES.find(l => l.code === targetLang)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -248,7 +286,7 @@ export function ChatPanel({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
+      <div className="relative flex items-center justify-between px-4 py-3 border-b border-white/[0.06] shrink-0">
         <div className="flex items-center gap-2">
           <Hash className="w-4 h-4 text-[#5a5a72]" />
           <span className="text-sm font-semibold text-[#9090a8]">Chat</span>
@@ -258,14 +296,80 @@ export function ChatPanel({
             </span>
           )}
         </div>
-        {onClose && (
+        <div className="flex items-center gap-1">
+          {/* Translation toggle */}
           <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-[#5a5a72] hover:text-[#9090a8] hover:bg-white/[0.06] transition-colors"
+            onClick={() => setLangOpen(v => !v)}
+            className={cn(
+              'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+              activeLang
+                ? 'text-[#60a5fa] bg-[rgba(59,130,246,0.1)] hover:bg-[rgba(59,130,246,0.18)]'
+                : 'text-[#5a5a72] hover:text-[#9090a8] hover:bg-white/[0.06]',
+            )}
+            title="Translate incoming messages"
           >
-            <X className="w-4 h-4" />
+            <Languages className="w-3.5 h-3.5" />
+            <span className="font-semibold uppercase">
+              {activeLang ? (activeLang.code === 'auto' ? 'Auto' : activeLang.code.split('-')[0]) : 'Off'}
+            </span>
           </button>
-        )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-[#5a5a72] hover:text-[#9090a8] hover:bg-white/[0.06] transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Language dropdown */}
+        <AnimatePresence>
+          {langOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+              className="absolute top-full right-3 mt-1 z-30 w-56 rounded-2xl overflow-hidden"
+              style={{
+                background:     'rgba(8,8,22,0.96)',
+                backdropFilter: 'blur(20px)',
+                border:         '1px solid rgba(255,255,255,0.09)',
+                boxShadow:      '0 20px 60px rgba(0,0,0,0.6)',
+              }}
+            >
+              <div className="px-3 py-2 border-b border-white/[0.06]">
+                <p className="text-[10px] uppercase tracking-widest text-[#5a5a72] font-bold">Translate messages to</p>
+              </div>
+              <button
+                onClick={() => { setTargetLang(''); setLangOpen(false) }}
+                className={cn(
+                  'w-full px-3 py-2 text-left text-xs transition-colors flex items-center justify-between',
+                  !targetLang ? 'bg-white/[0.06] text-[#f0f0f4]' : 'text-[#9090a8] hover:bg-white/[0.04]',
+                )}
+              >
+                <span>Off (show original)</span>
+                {!targetLang && <span className="text-[#c9a84c]">✓</span>}
+              </button>
+              <div className="max-h-72 overflow-y-auto">
+                {LANGUAGES.map(l => (
+                  <button
+                    key={l.code}
+                    onClick={() => { setTargetLang(l.code); setLangOpen(false) }}
+                    className={cn(
+                      'w-full px-3 py-2 text-left text-xs transition-colors flex items-center justify-between',
+                      targetLang === l.code ? 'bg-[rgba(59,130,246,0.12)] text-[#60a5fa]' : 'text-[#c0c0d0] hover:bg-white/[0.04]',
+                    )}
+                  >
+                    <span>{l.label}</span>
+                    <span className="text-[#5a5a72] text-[10px]">{l.native}</span>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Messages */}
@@ -292,6 +396,7 @@ export function ChatPanel({
                 key={msg.id}
                 message={msg}
                 isLocal={msg.participantId === localParticipantId}
+                targetLang={targetLang}
               />
             ))
           )}

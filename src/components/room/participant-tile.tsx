@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Mic, MicOff, Crown, WifiOff } from 'lucide-react'
 import type { RoomParticipant } from '@/hooks/use-room-channel'
@@ -29,7 +29,12 @@ function getGradient(name: string): string {
   return AVATAR_GRADIENTS[name.charCodeAt(0) % AVATAR_GRADIENTS.length]
 }
 
-/** Attach a MediaStream to a <video> element safely */
+/**
+ * Attach a MediaStream to a <video> element AND re-attach whenever the
+ * stream's tracks change. Without addtrack/removetrack listeners, a
+ * stream that gets a video track AFTER the initial bind (renegotiation,
+ * camera coming on, etc.) leaves the element blank.
+ */
 function VideoEl({
   stream,
   muted = false,
@@ -45,9 +50,15 @@ function VideoEl({
     const el = ref.current
     if (!el) return
     el.srcObject = stream
-    // Some browsers need a play() after setting srcObject
-    el.play().catch(() => { /* autoplay policy — ignored */ })
+    el.play().catch(() => {})
+
+    const replay = () => { el.play().catch(() => {}) }
+    stream.addEventListener('addtrack',    replay)
+    stream.addEventListener('removetrack', replay)
+
     return () => {
+      stream.removeEventListener('addtrack',    replay)
+      stream.removeEventListener('removetrack', replay)
       el.srcObject = null
     }
   }, [stream])
@@ -73,8 +84,31 @@ export function ParticipantTile({
 }: ParticipantTileProps) {
   const initials = getInitials(participant.name)
   const gradient = getGradient(participant.name)
-  const hasVideo = stream && stream.getVideoTracks().some(t => t.enabled && t.readyState === 'live')
-  const showVideo = hasVideo && !participant.isCameraOff
+
+  // Reactive video-track presence — recomputed on add/remove/ended events
+  const [hasVideo, setHasVideo] = useState(false)
+  useEffect(() => {
+    if (!stream) { setHasVideo(false); return }
+    const refresh = () => {
+      setHasVideo(stream.getVideoTracks().some(t => t.readyState === 'live'))
+    }
+    refresh()
+    stream.addEventListener('addtrack',    refresh)
+    stream.addEventListener('removetrack', refresh)
+    const offs: Array<() => void> = []
+    for (const t of stream.getTracks()) {
+      const h = () => refresh()
+      t.addEventListener('ended', h)
+      offs.push(() => t.removeEventListener('ended', h))
+    }
+    return () => {
+      stream.removeEventListener('addtrack',    refresh)
+      stream.removeEventListener('removetrack', refresh)
+      offs.forEach(off => off())
+    }
+  }, [stream])
+
+  const showVideo      = hasVideo && !participant.isCameraOff
   const isDisconnected = connectionState === 'failed' || connectionState === 'disconnected'
 
   return (
