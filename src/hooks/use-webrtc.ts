@@ -12,15 +12,20 @@ export interface WebRTCState {
 }
 
 export function useWebRTC(
-  myId:        string,
-  myJoinedAt:  number,
-  channel:     RoomChannelAdapter | null,
-  localStream: MediaStream | null
+  myId:         string,
+  myJoinedAt:   number,
+  channel:      RoomChannelAdapter | null,
+  localStream:  MediaStream | null,
+  screenStream: MediaStream | null = null,
 ): WebRTCState {
   const [remoteStreams,    setRemoteStreams]    = useState<Record<string, MediaStream>>({})
   const [connectionStates, setConnectionStates] = useState<Record<string, PeerConnectionState>>({})
 
-  const managerRef = useRef<WebRTCManager | null>(null)
+  const managerRef    = useRef<WebRTCManager | null>(null)
+  const localRef      = useRef(localStream)
+  const screenRef     = useRef(screenStream)
+  localRef.current    = localStream
+  screenRef.current   = screenStream
 
   // ── Create manager when channel becomes available ───────────────────────
   useEffect(() => {
@@ -55,10 +60,27 @@ export function useWebRTC(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, myId, myJoinedAt])
 
-  // ── Update tracks when local stream changes ───────────────────────────────
+  // ── Update camera tracks when local stream changes ────────────────────────
   useEffect(() => {
+    if (screenRef.current) return  // screen share is active — don't clobber with camera
     managerRef.current?.updateLocalStream(localStream)
   }, [localStream])
+
+  // ── Handle screen share: combine screen video + mic audio for peers ───────
+  useEffect(() => {
+    if (!managerRef.current) return
+
+    if (screenStream) {
+      // Build a combined stream: screen video track + mic audio track
+      const combined = new MediaStream()
+      screenStream.getVideoTracks().forEach(t => combined.addTrack(t))
+      localRef.current?.getAudioTracks().forEach(t => combined.addTrack(t))
+      managerRef.current.updateLocalStream(combined)
+    } else {
+      // Screen share stopped — restore camera stream
+      managerRef.current.updateLocalStream(localRef.current)
+    }
+  }, [screenStream])
 
   return { remoteStreams, connectionStates }
 }

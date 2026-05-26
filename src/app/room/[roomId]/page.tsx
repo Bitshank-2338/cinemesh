@@ -131,6 +131,7 @@ export default function RoomPage() {
   const roomName    = params.get('name')    ?? 'Movie Night'
   const isHost      = params.get('host')    === 'true'
   const displayName = params.get('display') ?? 'You'
+  const dbId        = params.get('dbId')    ?? ''
   // Reuse the participantId set in lobby so presence is consistent
   const participantId = useMemo(
     () => params.get('pid') ?? nanoid(10),
@@ -156,8 +157,8 @@ export default function RoomPage() {
     isHost,
   })
 
-  // ── WebRTC (P2P video/audio) ─────────────────────────────────────────────
-  const webrtc = useWebRTC(participantId, joinedAt, room.channel, media.localStream)
+  // ── WebRTC (P2P video/audio + screen share) ─────────────────────────────
+  const webrtc = useWebRTC(participantId, joinedAt, room.channel, media.localStream, media.screenStream)
 
   // ── Playback sync ────────────────────────────────────────────────────────
   const [playback, setPlayback] = useState<PlaybackState>({
@@ -209,32 +210,26 @@ export default function RoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [media.isMicOn, media.isCameraOn])
 
-  // Register participant row in DB on mount; remove on unmount
+  // Register participant row in DB; remove on unmount
   useEffect(() => {
-    const rid = roomId as string
-    upsertParticipant(rid, {
-      participantId,
-      displayName,
-      isHost,
-    }).catch(() => {})
-    return () => {
-      removeParticipant(rid, participantId).catch(() => {})
-    }
+    if (!dbId) return
+    upsertParticipant(dbId, { participantId, displayName, isHost }).catch(() => {})
+    return () => { removeParticipant(dbId, participantId).catch(() => {}) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [dbId])
 
   // Heartbeat every 10 s
   useEffect(() => {
-    const rid = roomId as string
+    if (!dbId) return
     const timer = setInterval(() => {
-      updateParticipantPresence(rid, participantId, {
+      updateParticipantPresence(dbId, participantId, {
         isMuted:     !media.isMicOn,
         isCameraOff: !media.isCameraOn,
       }).catch(() => {})
     }, 10_000)
     return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [media.isMicOn, media.isCameraOn])
+  }, [dbId, media.isMicOn, media.isCameraOn])
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleTogglePlay = useCallback(() => {

@@ -143,8 +143,10 @@ export default function LobbyPage() {
   const roomName    = searchParams.get('name') ?? 'Movie Night'
   const isHost      = searchParams.get('host') === 'true'
   const displayName = searchParams.get('display') ?? 'You'
+  // Room UUID from DB — passed by create/join pages so DB ops use the right FK
+  const dbId        = searchParams.get('dbId') ?? ''
 
-  // Prefer the ID passed from create page (host) or generate a stable one for guests
+  // Stable participant ID for this session
   const participantId = useMemo(
     () => searchParams.get('pid') ?? nanoid(10),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -181,32 +183,33 @@ export default function LobbyPage() {
   }, [media.isMicOn, media.isCameraOn])
 
   // Register participant row in DB on mount; remove on unmount
+  // Uses dbId (UUID) — not roomId (code) — to satisfy the FK constraint
   useEffect(() => {
-    const rid = roomId as string
-    upsertParticipant(rid, {
+    if (!dbId) return   // skip if no UUID yet (local-mode fallback)
+    upsertParticipant(dbId, {
       participantId,
       displayName,
       isHost,
     }).catch(() => {/* non-fatal */})
 
     return () => {
-      removeParticipant(rid, participantId).catch(() => {})
+      removeParticipant(dbId, participantId).catch(() => {})
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [dbId])
 
-  // Heartbeat every 10 s to keep participant row alive
+  // Heartbeat every 10 s
   useEffect(() => {
-    const rid = roomId as string
+    if (!dbId) return
     const timer = setInterval(() => {
-      updateParticipantPresence(rid, participantId, {
+      updateParticipantPresence(dbId, participantId, {
         isMuted:     !media.isMicOn,
         isCameraOff: !media.isCameraOn,
       }).catch(() => {})
     }, 10_000)
     return () => clearInterval(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [media.isMicOn, media.isCameraOn])
+  }, [dbId, media.isMicOn, media.isCameraOn])
 
   const inviteUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/join?code=${roomId}`
@@ -222,7 +225,12 @@ export default function LobbyPage() {
     setJoining(true)
     media.stopAll() // Room page will re-request media fresh
     router.push(
-      `/room/${roomId}?name=${encodeURIComponent(roomName)}&display=${encodeURIComponent(displayName)}&host=${isHost}&pid=${participantId}`
+      `/room/${roomId}` +
+      `?name=${encodeURIComponent(roomName)}` +
+      `&display=${encodeURIComponent(displayName)}` +
+      `&host=${isHost}` +
+      `&pid=${participantId}` +
+      (dbId ? `&dbId=${dbId}` : ''),
     )
   }
 

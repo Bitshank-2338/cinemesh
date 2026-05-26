@@ -85,7 +85,8 @@ export default function CreatePage() {
       `?name=${encodeURIComponent(roomName)}` +
       `&host=true` +
       `&display=${encodeURIComponent(displayName)}` +
-      `&pid=${hostId}`,
+      `&pid=${hostId}` +
+      `&dbId=${result.data.id}`,
     )
   }
 
