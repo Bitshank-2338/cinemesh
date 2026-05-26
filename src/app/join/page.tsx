@@ -24,7 +24,11 @@ export default function JoinPage() {
   const [code,        setCode]        = useState(() => formatCode(searchParams.get('code') ?? ''))
   const [displayName, setDisplayName] = useState('')
   const [loading,     setLoading]     = useState(false)
-  const [codeError,   setCodeError]   = useState('')
+  const [codeError,   setCodeError]   = useState(() =>
+    searchParams.get('err') === 'notfound'
+      ? 'That room doesn\'t exist or has expired. Double-check the code with your host.'
+      : '',
+  )
 
   // If the user lands mid-render without searchParams (SSR), sync once
   useEffect(() => {

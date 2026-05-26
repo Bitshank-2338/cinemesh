@@ -35,8 +35,16 @@ type AnySupabase = ReturnType<typeof createClient>
 let _default:  AnySupabase | null = null   // for Realtime channels
 let _cinemesh: AnySupabase | null = null   // for cinemesh schema queries
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL  ?? ''
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+// Strip BOM, surrounding quotes, and whitespace — env vars set via CLI from
+// Windows/PowerShell sometimes pick up a UTF-8 BOM (﻿) which silently
+// breaks URL prefix checks. This sanitizer makes the check robust.
+function clean(v: string | undefined): string {
+  if (!v) return ''
+  return v.replace(/^﻿/, '').replace(/^["']|["']$/g, '').trim()
+}
+
+const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL)
+const key = clean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
 
 function isConfigured(): boolean {
   return !!(url && key && url.startsWith('https://') && !url.includes('your-project'))

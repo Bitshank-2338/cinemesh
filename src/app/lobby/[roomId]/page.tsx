@@ -18,7 +18,8 @@ import { useRoomChannel } from '@/hooks/use-room-channel'
 import { copyToClipboard, getInitials } from '@/lib/utils'
 import { pageTransition, staggerBase, fadeUp } from '@/lib/motion'
 import { nanoid } from 'nanoid'
-import { upsertParticipant, removeParticipant, updateParticipantPresence } from '@/lib/room-service'
+import { upsertParticipant, removeParticipant, updateParticipantPresence, getRoomByCode } from '@/lib/room-service'
+import { isSupabaseConfigured } from '@/lib/supabase'
 
 // ─── Camera preview (attaches stream to <video>) ───────────────────────────
 function CameraPreview({
@@ -140,11 +141,13 @@ export default function LobbyPage() {
   const { roomId } = useParams()
   const searchParams = useSearchParams()
 
-  const roomName    = searchParams.get('name') ?? 'Movie Night'
-  const isHost      = searchParams.get('host') === 'true'
-  const displayName = searchParams.get('display') ?? 'You'
-  // Room UUID from DB — passed by create/join pages so DB ops use the right FK
-  const dbId        = searchParams.get('dbId') ?? ''
+  const roomName        = searchParams.get('name') ?? 'Movie Night'
+  const isHost          = searchParams.get('host') === 'true'
+  const displayName     = searchParams.get('display') ?? 'You'
+  // dbId may be passed via URL (preferred). If it's missing AND Supabase is
+  // configured, we look it up by code below and either set it or bounce.
+  const [dbId, setDbId] = useState(searchParams.get('dbId') ?? '')
+  const [roomCheckError, setRoomCheckError] = useState<string | null>(null)
 
   // Stable participant ID for this session
   const participantId = useMemo(
@@ -155,6 +158,31 @@ export default function LobbyPage() {
 
   const [copied,  setCopied]  = useState(false)
   const [joining, setJoining] = useState(false)
+
+  // ── Room existence guard ─────────────────────────────────────────────────
+  // If we don't already have a dbId and Supabase is configured, look up the
+  // room by code. If it doesn't exist, send the user back to /join with an error.
+  useEffect(() => {
+    if (dbId) return                       // already have it from URL
+    if (!isSupabaseConfigured()) return    // local mode — skip check
+    let cancelled = false
+    ;(async () => {
+      const result = await getRoomByCode(roomId as string)
+      if (cancelled) return
+      if (!result.ok) {
+        setRoomCheckError('Could not reach the room server.')
+        return
+      }
+      if (!result.data) {
+        // No such active room — bounce back to /join with the code as a hint
+        router.replace(`/join?code=${encodeURIComponent(roomId as string)}&err=notfound`)
+        return
+      }
+      setDbId(result.data.id)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Real media
   const media = useLocalMedia()
