@@ -546,6 +546,22 @@ export default function RoomPage() {
             ? <Wifi className="w-4 h-4 text-green-400" />
             : <WifiOff className="w-4 h-4 text-red-400" />
           }
+          {/* Quality / scale warning when the mesh is getting crowded.
+              At >8 peers, per-peer video bitrate auto-drops. At >14 it
+              gets quite compressed; suggest audio-only or fewer cams. */}
+          {room.participants.length > 8 && (
+            <Badge
+              variant={room.participants.length > 14 ? 'gold' : 'ghost'}
+              size="sm"
+              title={
+                room.participants.length > 14
+                  ? `Large room (${room.participants.length}). Video quality is reduced to keep the connection stable. For best results above 15 people, turn cameras off and use voice + screen share only.`
+                  : `Room is busy (${room.participants.length}). Video quality auto-reduced for stability.`
+              }
+            >
+              {room.participants.length > 14 ? 'Audio-friendly' : 'Reduced quality'}
+            </Badge>
+          )}
           <Badge variant="ghost" size="sm">{roomId as string}</Badge>
 
           {/* Participant avatar stack */}
@@ -606,35 +622,42 @@ export default function RoomPage() {
               />
             </div>
 
-            {/* Participant strip */}
-            <div className="w-[130px] flex flex-col gap-2 overflow-y-auto shrink-0">
-              {/* Local tile — always camera, never screen */}
-              <ParticipantTile
-                participant={localParticipant}
-                stream={media.localStream}
-                isLocal
-                size="sm"
-              />
-
-              {/* Remote tiles — always show their camera */}
-              <AnimatePresence>
-                {remoteParticipants.map(p => (
-                  <motion.div
-                    key={p.participantId}
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    exit={{ opacity: 0, scale: 0.9 }}
-                  >
-                    <ParticipantTile
-                      participant={p}
-                      stream={webrtc.remoteCameras[p.participantId] ?? null}
-                      connectionState={webrtc.connectionStates[p.participantId]}
-                      size="sm"
-                    />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
+            {/* Participant strip — vertical for small rooms, compact 2-col grid
+                for larger rooms so we don't run out of vertical space at 20. */}
+            {(() => {
+              const total = 1 + remoteParticipants.length
+              const useGrid = total > 6
+              const containerClass = useGrid
+                ? 'w-[260px] grid grid-cols-2 gap-1.5 content-start overflow-y-auto shrink-0'
+                : 'w-[130px] flex flex-col gap-2 overflow-y-auto shrink-0'
+              return (
+                <div className={containerClass}>
+                  <ParticipantTile
+                    participant={localParticipant}
+                    stream={media.localStream}
+                    isLocal
+                    size="sm"
+                  />
+                  <AnimatePresence>
+                    {remoteParticipants.map(p => (
+                      <motion.div
+                        key={p.participantId}
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 0.9 }}
+                      >
+                        <ParticipantTile
+                          participant={p}
+                          stream={webrtc.remoteCameras[p.participantId] ?? null}
+                          connectionState={webrtc.connectionStates[p.participantId]}
+                          size="sm"
+                        />
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                </div>
+              )
+            })()}
           </div>
 
           {/* Mobile sync bar */}

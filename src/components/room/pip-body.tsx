@@ -200,6 +200,120 @@ interface PipBodyProps {
   onPopBack:          () => void
 }
 
+// ─── Audio-only tile (off-screen video kept playing for sound) ───────────
+function AudioSink({ stream, isLocal }: { stream: MediaStream | null; isLocal: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !stream) return
+    el.srcObject = stream
+    el.muted = isLocal
+    el.play().catch(() => {})
+    return () => { el.srcObject = null }
+  }, [stream, isLocal])
+  // Hidden but present in the DOM so audio still routes through the element.
+  // We can't autoplay audio without a media element being attached.
+  return <video ref={ref} autoPlay playsInline muted={isLocal} style={{ display: 'none' }} />
+}
+
+// ─── Paginated cam grid (works for 1–20+ participants) ────────────────────
+function PipCamGrid({
+  localParticipant,
+  remoteParticipants,
+  localCamStream,
+  remoteCameras,
+  connectionStates,
+}: {
+  localParticipant:   RoomParticipant
+  remoteParticipants: RoomParticipant[]
+  localCamStream:     MediaStream | null
+  remoteCameras:      Record<string, MediaStream>
+  connectionStates:   Record<string, PeerConnectionState>
+}) {
+  // Adaptive page size — bigger rooms → smaller tiles → more per page
+  // (4 → 2 cols, 9 → 3 cols, 20 → 4 cols)
+  const total = 1 + remoteParticipants.length
+  const cols  = total <= 4 ? 2 : total <= 9 ? 3 : 4
+  const perPage = cols === 2 ? 4 : cols === 3 ? 9 : 12
+
+  const [page, setPage] = useState(0)
+  const totalPages = Math.max(1, Math.ceil(total / perPage))
+
+  // Stable order: local always first, then remotes
+  const all = [
+    { p: localParticipant, isLocal: true,  stream: localCamStream },
+    ...remoteParticipants.map(p => ({
+      p, isLocal: false,
+      stream: remoteCameras[p.participantId] ?? null,
+    })),
+  ]
+
+  const start = page * perPage
+  const visible = all.slice(start, start + perPage)
+  const hidden  = all.slice(0, start).concat(all.slice(start + perPage))
+
+  // Reset page if it falls off the end (e.g., people left)
+  useEffect(() => {
+    if (page >= totalPages) setPage(0)
+  }, [page, totalPages])
+
+  return (
+    <div className="shrink-0 border-b border-white/10">
+      <div
+        className="grid gap-1.5 p-2"
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          maxHeight: '46vh',
+          overflowY: 'auto',
+        }}
+      >
+        {visible.map(({ p, isLocal, stream }) => (
+          <MiniTile
+            key={p.participantId}
+            participant={p}
+            stream={stream}
+            isLocal={isLocal}
+            connectionState={connectionStates[p.participantId]}
+          />
+        ))}
+        {total === 1 && (
+          <div className="aspect-video rounded-lg flex items-center justify-center text-[10px] text-[#5a5a72] bg-white/3 border border-dashed border-white/10">
+            Waiting for others…
+          </div>
+        )}
+      </div>
+
+      {/* Audio sinks for the OFF-SCREEN participants so voices keep coming through */}
+      {hidden.map(({ p, isLocal, stream }) => (
+        <AudioSink key={'as-' + p.participantId} stream={stream} isLocal={isLocal} />
+      ))}
+
+      {/* Pagination + counter */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-2 pb-1.5">
+          <button
+            onClick={() => setPage(p => Math.max(0, p - 1))}
+            disabled={page === 0}
+            className="px-2 py-0.5 rounded-md text-[10px] text-[#9090a8] hover:bg-white/10 disabled:opacity-30"
+          >
+            ← Prev
+          </button>
+          <span className="text-[10px] text-[#5a5a72]">
+            {start + 1}-{Math.min(start + perPage, total)} of {total}
+          </span>
+          <button
+            onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}
+            disabled={page >= totalPages - 1}
+            className="px-2 py-0.5 rounded-md text-[10px] text-[#9090a8] hover:bg-white/10 disabled:opacity-30"
+          >
+            Next →
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Bubble for a single chat message (extracted so we can use the translation hook)
 function PipBubble({
   message,
@@ -362,24 +476,16 @@ export function PipBody({
         )}
       </div>
 
-      {/* Cam grid — local + remote */}
-      <div className="shrink-0 grid grid-cols-2 gap-1.5 p-2 border-b border-white/10 max-h-[40vh] overflow-y-auto">
-        <MiniTile participant={localParticipant} stream={localCamStream} isLocal />
-        {remoteParticipants.map(p => (
-          <MiniTile
-            key={p.participantId}
-            participant={p}
-            stream={remoteCameras[p.participantId] ?? null}
-            isLocal={false}
-            connectionState={connectionStates[p.participantId]}
-          />
-        ))}
-        {remoteParticipants.length === 0 && (
-          <div className="aspect-video rounded-lg flex items-center justify-center text-[10px] text-[#5a5a72] bg-white/3 border border-dashed border-white/10">
-            Waiting for others…
-          </div>
-        )}
-      </div>
+      {/* Cam grid — local + remote, with pagination for big rooms.
+          Audio for all peers still plays via the (always-mounted) <audio>
+          elements at the bottom; only the visible page renders video. */}
+      <PipCamGrid
+        localParticipant={localParticipant}
+        remoteParticipants={remoteParticipants}
+        localCamStream={localCamStream}
+        remoteCameras={remoteCameras}
+        connectionStates={connectionStates}
+      />
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2">

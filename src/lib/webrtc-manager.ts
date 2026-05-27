@@ -173,6 +173,51 @@ export class WebRTCManager {
     for (const [, pc] of this.peers) {
       this.syncTracksToPeer(pc)
     }
+    this.applyBitrateProfile()
+  }
+
+  /**
+   * Cap outgoing video bitrate based on peer count. WebRTC mesh sends N-1
+   * copies of each track, so total upload scales linearly with room size.
+   * Without this, a 10-person room would saturate most home uplinks and
+   * trigger packet loss / "Reconnecting" warnings.
+   *
+   * Camera profile (per peer):    1 Mbps  →  500k  →  250k  →  150k
+   * Screen profile (per peer):    2.5 Mbps→ 1.5M  →  1 Mbps→  800k
+   *
+   * Re-applied every time the peer set or local streams change.
+   */
+  private applyBitrateProfile(): void {
+    const peerCount = this.peers.size
+    const camBps = peerCount <= 3 ? 1_000_000
+                 : peerCount <= 7 ?   500_000
+                 : peerCount <= 13?   250_000
+                 :                    150_000
+    const scrBps = peerCount <= 3 ? 2_500_000
+                 : peerCount <= 7 ? 1_500_000
+                 : peerCount <= 13? 1_000_000
+                 :                    800_000
+
+    for (const pc of this.peers.values()) {
+      if (pc.signalingState === 'closed') continue
+      for (const sender of pc.getSenders()) {
+        if (sender.track?.kind !== 'video') continue
+        // Distinguish camera vs screen by which local stream the track belongs to
+        const isScreen = !!this.screenStream?.getTracks().includes(sender.track)
+        const maxBitrate = isScreen ? scrBps : camBps
+        try {
+          const params = sender.getParameters()
+          if (!params.encodings || params.encodings.length === 0) {
+            // setParameters requires at least one encoding entry
+            params.encodings = [{}]
+          }
+          params.encodings[0].maxBitrate = maxBitrate
+          // Prefer maintaining framerate when bandwidth gets tight (smoother for movies)
+          params.degradationPreference = isScreen ? 'maintain-framerate' : 'balanced'
+          sender.setParameters(params).catch(() => {/* closing pc */})
+        } catch { /* ignore */ }
+      }
+    }
   }
 
   private syncTracksToPeer(pc: RTCPeerConnection): void {
@@ -251,6 +296,7 @@ export class WebRTCManager {
   private async createPeerAndOffer(peerId: string): Promise<void> {
     const pc = this.createPeerConnection(peerId)
     this.syncTracksToPeer(pc)
+    this.applyBitrateProfile()
 
     try {
       const offer = await pc.createOffer()
@@ -281,6 +327,7 @@ export class WebRTCManager {
         if (!pc) {
           pc = this.createPeerConnection(fromId)
           this.syncTracksToPeer(pc)
+          this.applyBitrateProfile()
         }
         try {
           await pc.setRemoteDescription(
@@ -518,5 +565,8 @@ export class WebRTCManager {
     this.pendingTracks.delete(peerId)
     this.onRemoteStream(peerId, 'camera', null)
     this.onRemoteStream(peerId, 'screen', null)
+
+    // Room is smaller now — bump quality back up for remaining peers
+    this.applyBitrateProfile()
   }
 }
