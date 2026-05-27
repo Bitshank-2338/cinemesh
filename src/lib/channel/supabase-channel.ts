@@ -14,6 +14,7 @@ import type {
   ChatPayload,
   SyncPayload,
   SignalPayload,
+  ModerationPayload,
   ChannelEvent,
   ChannelEventHandler,
 } from './types'
@@ -98,6 +99,10 @@ export class SupabaseChannel implements RoomChannelAdapter {
       this.emit({ kind: 'signal', signal: payload })
     })
 
+    this.channel.on('broadcast', { event: 'moderation' }, ({ payload }: { payload: ModerationPayload }) => {
+      this.emit({ kind: 'moderation', payload })
+    })
+
     // Subscribe and track presence
     await new Promise<void>((resolve, reject) => {
       this.channel!.subscribe(async (status) => {
@@ -140,6 +145,12 @@ export class SupabaseChannel implements RoomChannelAdapter {
 
   sendSignal(signal: SignalPayload): void {
     this.channel?.send({ type: 'broadcast', event: 'signal', payload: signal })
+  }
+
+  sendModeration(payload: ModerationPayload): void {
+    this.channel?.send({ type: 'broadcast', event: 'moderation', payload })
+    // Self-echo so the host sees their own action's UI side-effect locally
+    this.emit({ kind: 'moderation', payload })
   }
 
   on(handler: ChannelEventHandler): () => void {

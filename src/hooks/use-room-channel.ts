@@ -11,6 +11,8 @@ import type {
   ChatPayload,
   SyncPayload,
   SyncAction,
+  ModerationPayload,
+  ModerationAction,
 } from '@/lib/channel'
 
 export interface RoomParticipant extends PresenceInfo {}
@@ -30,9 +32,14 @@ export interface RoomChannelState {
   error:         string | null
   transport:     'supabase' | 'local'
 
-  sendMessage:   (content: string) => void
-  sendSync:      (action: SyncAction, time: number) => void
+  /** Latest moderation event received (mostly used by callers via onModeration). */
+  lastModeration: ModerationPayload | null
+
+  sendMessage:    (content: string) => void
+  sendSync:       (action: SyncAction, time: number) => void
   updatePresence: (patch: Partial<PresenceInfo>) => void
+  /** Host-only: kick / mute / stop-share another participant */
+  sendModeration: (targetId: string, action: ModerationAction) => void
 
   /** The raw adapter — pass to WebRTCManager */
   channel:       RoomChannelAdapter | null
@@ -41,12 +48,13 @@ export interface RoomChannelState {
 export function useRoomChannel(
   opts: UseRoomChannelOptions | null
 ): RoomChannelState {
-  const [participants,  setParticipants]  = useState<RoomParticipant[]>([])
-  const [messages,      setMessages]      = useState<ChatPayload[]>([])
-  const [syncState,     setSyncState]     = useState<SyncPayload | null>(null)
-  const [connected,     setConnected]     = useState(false)
-  const [error,         setError]         = useState<string | null>(null)
-  const [channel,       setChannel]       = useState<RoomChannelAdapter | null>(null)
+  const [participants,    setParticipants]    = useState<RoomParticipant[]>([])
+  const [messages,        setMessages]        = useState<ChatPayload[]>([])
+  const [syncState,       setSyncState]       = useState<SyncPayload | null>(null)
+  const [connected,       setConnected]       = useState(false)
+  const [error,           setError]           = useState<string | null>(null)
+  const [channel,         setChannel]         = useState<RoomChannelAdapter | null>(null)
+  const [lastModeration,  setLastModeration]  = useState<ModerationPayload | null>(null)
 
   const channelRef = useRef<RoomChannelAdapter | null>(null)
   const optsRef    = useRef(opts)
@@ -104,6 +112,9 @@ export function useRoomChannel(
           break
         case 'sync':
           setSyncState(event.event)
+          break
+        case 'moderation':
+          setLastModeration(event.payload)
           break
       }
     })
@@ -177,6 +188,18 @@ export function useRoomChannel(
     }
   }, [opts?.participantId])
 
+  const sendModeration = useCallback((targetId: string, action: ModerationAction) => {
+    const ch = channelRef.current
+    const o  = optsRef.current
+    if (!ch || !o) return
+    ch.sendModeration({
+      targetId,
+      action,
+      issuerId: o.participantId,
+      issuedAt: Date.now(),
+    })
+  }, [])
+
   return {
     participants,
     messages,
@@ -184,9 +207,11 @@ export function useRoomChannel(
     connected,
     error,
     transport,
+    lastModeration,
     sendMessage,
     sendSync,
     updatePresence,
+    sendModeration,
     channel,
   }
 }

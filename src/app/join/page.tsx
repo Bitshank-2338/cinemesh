@@ -24,11 +24,17 @@ export default function JoinPage() {
   const [code,        setCode]        = useState(() => formatCode(searchParams.get('code') ?? ''))
   const [displayName, setDisplayName] = useState('')
   const [loading,     setLoading]     = useState(false)
-  const [codeError,   setCodeError]   = useState(() =>
-    searchParams.get('err') === 'notfound'
-      ? 'That room doesn\'t exist or has expired. Double-check the code with your host.'
-      : '',
-  )
+  const [codeError,   setCodeError]   = useState(() => {
+    const err = searchParams.get('err')
+    if (err === 'notfound') return 'That room doesn\'t exist or has expired. Double-check the code with your host.'
+    if (err === 'kicked') {
+      const by = searchParams.get('by')
+      return by
+        ? `${decodeURIComponent(by)} removed you from the room.`
+        : 'You were removed from the room by the host.'
+    }
+    return ''
+  })
 
   // If the user lands mid-render without searchParams (SSR), sync once
   useEffect(() => {

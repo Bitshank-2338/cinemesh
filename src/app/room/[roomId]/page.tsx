@@ -415,6 +415,57 @@ export default function RoomPage() {
     }
   }, [media.isScreenSharing, isPipOpen])
 
+  // ── Receive host moderation commands ────────────────────────────────────
+  // The host broadcasts a 'moderation' event; every client receives it and
+  // applies the action ONLY if the target is themselves and the issuer is
+  // actually the host (presence isHost=true). Without an SFU we can't
+  // enforce mute server-side — this is a cooperative protocol.
+  const [kicked, setKicked] = useState<{ by: string } | null>(null)
+  useEffect(() => {
+    const mod = room.lastModeration
+    if (!mod) return
+    if (mod.targetId !== participantId) return
+
+    // Verify the issuer is the actual room host
+    const issuer = room.participants.find(p => p.participantId === mod.issuerId)
+    if (!issuer?.isHost) return
+
+    switch (mod.action) {
+      case 'mute-mic':
+        if (media.isMicOn) media.toggleMic()
+        break
+      case 'stop-camera':
+        if (media.isCameraOn) media.toggleCamera()
+        break
+      case 'stop-screen':
+        if (media.isScreenSharing) media.stopScreen()
+        break
+      case 'kick':
+        setKicked({ by: issuer.name })
+        // Tear down media + leave room. The room page will redirect below.
+        media.stopAll()
+        break
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room.lastModeration])
+
+  // After being kicked, give the user a moment to read the message, then bounce
+  useEffect(() => {
+    if (!kicked) return
+    const t = setTimeout(() => {
+      router.replace(`/join?err=kicked&by=${encodeURIComponent(kicked.by)}`)
+    }, 2500)
+    return () => clearTimeout(t)
+  }, [kicked, router])
+
+  // Helper: who's currently screen-sharing (for the "Stop share" menu item)
+  const sharingIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const pid of Object.keys(webrtc.remoteScreens)) ids.add(pid)
+    if (media.isScreenSharing) ids.add(participantId)
+    return ids
+  }, [webrtc.remoteScreens, media.isScreenSharing, participantId])
+
   // Register participant row in DB; remove on unmount
   useEffect(() => {
     if (!dbId) return
@@ -593,6 +644,36 @@ export default function RoomPage() {
         <ConnectionBanner error={room.error} onRetry={handleRetryMedia} />
       )}
 
+      {/* ── Kicked overlay (full-screen blocker) ─────────────────── */}
+      <AnimatePresence>
+        {kicked && (
+          <motion.div
+            key="kicked"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 backdrop-blur-lg"
+          >
+            <motion.div
+              initial={{ scale: 0.92, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              className="text-center max-w-md px-6"
+            >
+              <div className="w-16 h-16 rounded-2xl mx-auto mb-5 bg-red-500/15 border border-red-500/30 flex items-center justify-center">
+                <span className="text-3xl">🚪</span>
+              </div>
+              <h2 className="text-2xl font-display font-bold text-[#f0f0f4] mb-2">
+                You were removed
+              </h2>
+              <p className="text-sm text-[#9090a8]">
+                <span className="font-semibold text-[#f0f0f4]">{kicked.by}</span> removed you from the room.
+              </p>
+              <p className="text-xs text-[#5a5a72] mt-3">Redirecting…</p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* ── Body ─────────────────────────────────────────────────── */}
       <div className="relative z-10 flex flex-1 overflow-hidden">
         <div className="flex flex-col flex-1 overflow-hidden">
@@ -651,6 +732,8 @@ export default function RoomPage() {
                           stream={webrtc.remoteCameras[p.participantId] ?? null}
                           connectionState={webrtc.connectionStates[p.participantId]}
                           size="sm"
+                          isSharing={sharingIds.has(p.participantId)}
+                          onModerate={isHost ? (action) => room.sendModeration(p.participantId, action) : undefined}
                         />
                       </motion.div>
                     ))}

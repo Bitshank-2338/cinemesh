@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
-import { Mic, MicOff, Crown, WifiOff } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Mic, MicOff, Crown, WifiOff, MoreVertical, VolumeX, VideoOff, Monitor, UserX } from 'lucide-react'
 import type { RoomParticipant } from '@/hooks/use-room-channel'
 import type { PeerConnectionState } from '@/hooks/use-webrtc'
+import type { ModerationAction } from '@/lib/channel'
 import { getInitials, cn } from '@/lib/utils'
 
 interface ParticipantTileProps {
@@ -14,6 +15,11 @@ interface ParticipantTileProps {
   speaking?:       boolean
   isLocal?:        boolean
   size?:           'sm' | 'md' | 'lg'
+
+  /** If set, render a host-only moderation menu (3-dot button) on remote tiles. */
+  onModerate?:     (action: ModerationAction) => void
+  /** Is this participant currently screen-sharing? Used to enable Stop Share. */
+  isSharing?:      boolean
 }
 
 const AVATAR_GRADIENTS = [
@@ -81,7 +87,11 @@ export function ParticipantTile({
   speaking = false,
   isLocal = false,
   size = 'md',
+  onModerate,
+  isSharing = false,
 }: ParticipantTileProps) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [confirmKick, setConfirmKick] = useState(false)
   const initials = getInitials(participant.name)
   const gradient = getGradient(participant.name)
 
@@ -166,6 +176,95 @@ export function ParticipantTile({
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 gap-2">
           <WifiOff className="w-5 h-5 text-red-400" />
           <span className="text-xs text-red-400 font-medium">Reconnecting</span>
+        </div>
+      )}
+
+      {/* Host moderation menu — only rendered when onModerate is provided (host viewing a remote tile) */}
+      {onModerate && !isLocal && (
+        <div className="absolute top-1.5 right-1.5 z-20">
+          <button
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(v => !v) }}
+            className="p-1 rounded-md text-white opacity-80 hover:opacity-100 transition-opacity"
+            style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
+            title="Host controls"
+          >
+            <MoreVertical className="w-3.5 h-3.5" />
+          </button>
+          <AnimatePresence>
+            {menuOpen && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: -4 }}
+                animate={{ opacity: 1, scale: 1,  y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: -4 }}
+                transition={{ duration: 0.12 }}
+                className="absolute top-full right-0 mt-1 w-44 rounded-xl overflow-hidden z-30"
+                style={{
+                  background:     'rgba(10,10,22,0.98)',
+                  backdropFilter: 'blur(20px)',
+                  border:         '1px solid rgba(255,255,255,0.12)',
+                  boxShadow:      '0 16px 40px rgba(0,0,0,0.7)',
+                }}
+              >
+                <div className="px-3 py-2 border-b border-white/10">
+                  <p className="text-[10px] uppercase tracking-widest text-[#5a5a72] font-bold">Host controls</p>
+                  <p className="text-xs text-[#f0f0f4] font-semibold truncate mt-0.5">{participant.name}</p>
+                </div>
+                <button
+                  onClick={() => { onModerate('mute-mic'); setMenuOpen(false) }}
+                  className="w-full px-3 py-2 text-left text-xs text-[#c0c0d0] hover:bg-white/[0.06] flex items-center gap-2"
+                  disabled={participant.isMuted}
+                >
+                  <VolumeX className="w-3.5 h-3.5 text-red-400" />
+                  <span>{participant.isMuted ? 'Already muted' : 'Mute their mic'}</span>
+                </button>
+                <button
+                  onClick={() => { onModerate('stop-camera'); setMenuOpen(false) }}
+                  className="w-full px-3 py-2 text-left text-xs text-[#c0c0d0] hover:bg-white/[0.06] flex items-center gap-2"
+                  disabled={participant.isCameraOff}
+                >
+                  <VideoOff className="w-3.5 h-3.5 text-red-400" />
+                  <span>{participant.isCameraOff ? 'Camera already off' : 'Turn off their camera'}</span>
+                </button>
+                <button
+                  onClick={() => { onModerate('stop-screen'); setMenuOpen(false) }}
+                  className="w-full px-3 py-2 text-left text-xs text-[#c0c0d0] hover:bg-white/[0.06] flex items-center gap-2 disabled:opacity-40"
+                  disabled={!isSharing}
+                >
+                  <Monitor className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{isSharing ? 'Stop their screen share' : 'Not sharing screen'}</span>
+                </button>
+                <div className="border-t border-white/10">
+                  {!confirmKick ? (
+                    <button
+                      onClick={() => setConfirmKick(true)}
+                      className="w-full px-3 py-2 text-left text-xs text-red-400 hover:bg-red-500/10 flex items-center gap-2 font-semibold"
+                    >
+                      <UserX className="w-3.5 h-3.5" />
+                      <span>Remove from room</span>
+                    </button>
+                  ) : (
+                    <div className="px-3 py-2 bg-red-500/10">
+                      <p className="text-[10px] text-red-300 mb-1.5">Remove {participant.name}?</p>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => { onModerate('kick'); setMenuOpen(false); setConfirmKick(false) }}
+                          className="flex-1 px-2 py-1 rounded text-[10px] font-bold bg-red-500 text-white hover:bg-red-600"
+                        >
+                          Yes, remove
+                        </button>
+                        <button
+                          onClick={() => setConfirmKick(false)}
+                          className="flex-1 px-2 py-1 rounded text-[10px] text-[#9090a8] bg-white/10 hover:bg-white/15"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       )}
 

@@ -2,7 +2,7 @@ import { LocalChannel } from './local-channel'
 import { SupabaseChannel } from './supabase-channel'
 import type { RoomChannelAdapter } from './types'
 
-export type { RoomChannelAdapter, PresenceInfo, ChatPayload, SyncPayload, SignalPayload, ChannelEvent, ChannelEventHandler, SyncAction } from './types'
+export type { RoomChannelAdapter, PresenceInfo, ChatPayload, SyncPayload, SignalPayload, ChannelEvent, ChannelEventHandler, SyncAction, ModerationPayload, ModerationAction, StreamRolesPayload } from './types'
 
 /**
  * createChannel — picks the appropriate transport automatically.

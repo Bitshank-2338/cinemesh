@@ -19,6 +19,7 @@ import type {
   ChatPayload,
   SyncPayload,
   SignalPayload,
+  ModerationPayload,
   ChannelEvent,
   ChannelEventHandler,
 } from './types'
@@ -30,6 +31,7 @@ type LocalMessage =
   | { type: 'CHAT';       message: ChatPayload }
   | { type: 'SYNC';       event: SyncPayload }
   | { type: 'SIGNAL';     signal: SignalPayload }
+  | { type: 'MOD';        payload: ModerationPayload }
 
 const HEARTBEAT_MS = 5_000
 const STALE_MS     = 15_000
@@ -120,6 +122,12 @@ export class LocalChannel implements RoomChannelAdapter {
     this.broadcast({ type: 'SIGNAL', signal })
   }
 
+  sendModeration(payload: ModerationPayload): void {
+    this.broadcast({ type: 'MOD', payload })
+    // Self-echo for host UI consistency
+    this.emit({ kind: 'moderation', payload })
+  }
+
   on(handler: ChannelEventHandler): () => void {
     this.handlers.add(handler)
     return () => this.handlers.delete(handler)
@@ -185,6 +193,10 @@ export class LocalChannel implements RoomChannelAdapter {
 
       case 'SIGNAL':
         this.emit({ kind: 'signal', signal: msg.signal })
+        break
+
+      case 'MOD':
+        this.emit({ kind: 'moderation', payload: msg.payload })
         break
     }
   }
