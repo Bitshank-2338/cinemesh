@@ -11,6 +11,7 @@ import { useLocalMedia } from '@/hooks/use-local-media'
 import { upsertParticipant, removeParticipant, updateParticipantPresence } from '@/lib/room-service'
 import { useRoomChannel } from '@/hooks/use-room-channel'
 import { useWebRTC, type PeerConnectionState } from '@/hooks/use-webrtc'
+import { useLiveKitRoom, isLiveKitConfigured } from '@/hooks/use-livekit-room'
 import type { ChatPayload } from '@/lib/channel'
 
 import { ControlsDock } from '@/components/room/controls-dock'
@@ -352,8 +353,35 @@ export default function RoomPage() {
     isHost,
   })
 
-  // ── WebRTC (P2P video/audio + screen share) ─────────────────────────────
-  const webrtc = useWebRTC(participantId, joinedAt, room.channel, media.localStream, media.screenStream)
+  // ── Media transport: LiveKit SFU if configured, else WebRTC mesh ─────
+  // Both hooks ALWAYS run (React hook rules), but only the active one
+  // actually connects. LiveKit takes precedence when NEXT_PUBLIC_LIVEKIT_URL
+  // is set (Vercel env var).
+  const useLk = isLiveKitConfigured()
+  const livekit = useLiveKitRoom({
+    roomId:        useLk ? (roomId as string) : null,
+    identity:      participantId,
+    displayName,
+    isHost,
+    cameraStream:  media.localStream,
+    screenStream:  media.screenStream,
+  })
+  const mesh = useWebRTC(
+    participantId,
+    joinedAt,
+    useLk ? null : room.channel,   // mesh signals over Realtime only when LiveKit is off
+    useLk ? null : media.localStream,
+    useLk ? null : media.screenStream,
+  )
+
+  // Unified transport interface — same shape regardless of which one is active.
+  const webrtc = useLk
+    ? {
+        remoteCameras:    livekit.remoteCameras,
+        remoteScreens:    livekit.remoteScreens,
+        connectionStates: livekit.connectionStates,
+      }
+    : mesh
 
   // ── Playback sync ────────────────────────────────────────────────────────
   const [playback, setPlayback] = useState<PlaybackState>({

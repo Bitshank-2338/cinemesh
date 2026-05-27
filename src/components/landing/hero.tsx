@@ -11,11 +11,10 @@ import {
   Play,
   Users,
   Zap,
-  Star,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { staggerBase, fadeUp } from '@/lib/motion'
+import { fadeUp } from '@/lib/motion'
 
 // ─── Floating Video Card ──────────────────────────────────────────
 function FloatingParticipantCard({
@@ -227,32 +226,6 @@ function CinemaPreview() {
   )
 }
 
-// ─── Stats Bar ────────────────────────────────────────────────────
-function StatsBar() {
-  const stats = [
-    { value: '50K+', label: 'Watch Parties' },
-    { value: '200K+', label: 'Happy Viewers' },
-    { value: '<50ms', label: 'Sync Latency' },
-    { value: '4K', label: 'Resolution' },
-  ]
-
-  return (
-    <motion.div
-      variants={staggerBase}
-      initial="hidden"
-      animate="visible"
-      className="flex flex-wrap justify-center gap-8 mt-16"
-    >
-      {stats.map((s) => (
-        <motion.div key={s.label} variants={fadeUp} className="text-center">
-          <p className="clamp-title font-display font-bold text-gradient-gold">{s.value}</p>
-          <p className="text-xs text-[#5a5a72] mt-0.5 font-medium uppercase tracking-wider">{s.label}</p>
-        </motion.div>
-      ))}
-    </motion.div>
-  )
-}
-
 // ─── Hero ─────────────────────────────────────────────────────────
 export function Hero() {
   const reduced = useReducedMotion()
@@ -329,26 +302,11 @@ export function Hero() {
           </Link>
         </motion.div>
 
-        {/* Trust */}
-        <motion.div
-          className="flex items-center gap-2 text-sm text-[#5a5a72] mb-20"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.7, delay: 0.6 }}
-        >
-          <div className="flex">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <Star key={i} className="w-3.5 h-3.5 text-[#c9a84c]" fill="currentColor" />
-            ))}
-          </div>
-          <span>Loved by 200K+ viewers worldwide</span>
-        </motion.div>
+        {/* Spacer */}
+        <div className="mb-20" />
 
         {/* Screen preview */}
         <CinemaPreview />
-
-        {/* Stats */}
-        <StatsBar />
       </div>
 
       {/* Bottom fade */}
