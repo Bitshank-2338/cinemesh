@@ -920,6 +920,12 @@ export default function RoomPage() {
           onSend={room.sendMessage}
           localParticipantId={participantId}
           onPopBack={() => setIsPipOpen(false)}
+          isMicOn={media.isMicOn}
+          isCameraOn={media.isCameraOn}
+          isScreenSharing={media.isScreenSharing}
+          onToggleMic={media.toggleMic}
+          onToggleCamera={media.toggleCamera}
+          onToggleScreenShare={handleScreenShare}
         />
       </PipWindow>
     </div>

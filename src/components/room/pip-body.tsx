@@ -9,7 +9,10 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Send, Smile, Sticker, X, Languages } from 'lucide-react'
+import {
+  Send, Smile, Sticker, X, Languages,
+  Mic, MicOff, Video, VideoOff, Monitor, MonitorOff,
+} from 'lucide-react'
 import type { ChatPayload } from '@/lib/channel'
 import type { RoomParticipant } from '@/hooks/use-room-channel'
 import type { PeerConnectionState } from '@/hooks/use-webrtc'
@@ -198,6 +201,61 @@ interface PipBodyProps {
   onSend:             (s: string) => void
   localParticipantId: string
   onPopBack:          () => void
+
+  // Media state + handlers (passed from room page)
+  isMicOn:            boolean
+  isCameraOn:         boolean
+  isScreenSharing:    boolean
+  onToggleMic:        () => void
+  onToggleCamera:     () => void
+  onToggleScreenShare:() => void
+}
+
+// ─── Compact control button used in the PiP media bar ─────────────────────
+function PipControlButton({
+  icon: Icon,
+  label,
+  active,
+  danger  = false,
+  accent  = false,
+  onClick,
+}: {
+  icon:    React.ComponentType<{ className?: string }>
+  label:   string
+  active:  boolean
+  danger?: boolean
+  accent?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all hover:scale-105 active:scale-95"
+      style={{
+        background: danger
+          ? 'rgba(239,68,68,0.18)'
+          : accent
+          ? 'rgba(201,168,76,0.18)'
+          : active
+          ? 'rgba(255,255,255,0.08)'
+          : 'rgba(255,255,255,0.04)',
+        border: `1px solid ${
+          danger
+            ? 'rgba(239,68,68,0.32)'
+            : accent
+            ? 'rgba(201,168,76,0.32)'
+            : active
+            ? 'rgba(255,255,255,0.12)'
+            : 'rgba(255,255,255,0.07)'
+        }`,
+        color: danger ? '#f87171' : accent ? '#c9a84c' : active ? '#f0f0f4' : '#9090a8',
+      }}
+      title={label}
+    >
+      <Icon className="w-3.5 h-3.5" />
+      <span>{label}</span>
+    </button>
+  )
 }
 
 // ─── Audio-only tile (off-screen video kept playing for sound) ───────────
@@ -376,6 +434,12 @@ export function PipBody({
   onSend,
   localParticipantId,
   onPopBack,
+  isMicOn,
+  isCameraOn,
+  isScreenSharing,
+  onToggleMic,
+  onToggleCamera,
+  onToggleScreenShare,
 }: PipBodyProps) {
   const [input, setInput]   = useState('')
   const [picker, setPicker] = useState<'emoji' | 'sticker' | null>(null)
@@ -487,6 +551,33 @@ export function PipBody({
         connectionStates={connectionStates}
       />
 
+      {/* Media controls — mic, camera, screen share. Compact 3-button bar
+          so the host can mute themselves / cut camera / stop the share
+          without having to switch back to the main CineMesh window. */}
+      <div className="shrink-0 flex items-center justify-center gap-1.5 px-2 py-2 border-b border-white/10 bg-black/30">
+        <PipControlButton
+          icon={isMicOn ? Mic : MicOff}
+          label={isMicOn ? 'Mute' : 'Unmute'}
+          active={isMicOn}
+          danger={!isMicOn}
+          onClick={onToggleMic}
+        />
+        <PipControlButton
+          icon={isCameraOn ? Video : VideoOff}
+          label={isCameraOn ? 'Camera' : 'Cam off'}
+          active={isCameraOn}
+          danger={!isCameraOn}
+          onClick={onToggleCamera}
+        />
+        <PipControlButton
+          icon={isScreenSharing ? MonitorOff : Monitor}
+          label={isScreenSharing ? 'Stop share' : 'Share screen'}
+          active={isScreenSharing}
+          accent={isScreenSharing}
+          onClick={onToggleScreenShare}
+        />
+      </div>
+
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
         {realMessages.length === 0 ? (
@@ -505,11 +596,26 @@ export function PipBody({
         ))}
       </div>
 
-      {/* Picker */}
+      {/* Picker.
+          PiP is a small window — typing-then-sending is fiddly. Tap on
+          an emoji should fire immediately (same as a sticker). If the
+          user has text in the input, append instead so they can build
+          a longer message. The Picker component already prefixes
+          stickers with 'STK:' before invoking onPick. */}
       {picker && (
         <Picker mode={picker} onPick={(s) => {
-          if (picker === 'sticker') { send(s); setPicker(null) }
-          else setInput(prev => prev + s)
+          if (picker === 'sticker') {
+            send(s)            // Picker already added 'STK:' prefix
+            setPicker(null)
+            return
+          }
+          // Emoji: send immediately if input empty, append otherwise
+          if (input.trim().length === 0) {
+            send(s)
+            setPicker(null)
+          } else {
+            setInput(prev => prev + s)
+          }
         }} />
       )}
 
