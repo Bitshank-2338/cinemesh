@@ -42,9 +42,21 @@ export interface LiveKitRoomState {
   room:             Room | null
 }
 
+/**
+ * Strip BOM and surrounding quotes from env values — same defense as in
+ * supabase.ts. When env vars are set via `cmd /c type | vercel env add`,
+ * Vercel sometimes wraps the value in quotes, which would break the WS URL.
+ */
+function cleanEnv(v: string | undefined): string {
+  if (!v) return ''
+  return v.replace(/^﻿/, '').replace(/^["']|["']$/g, '').trim()
+}
+
+export const getLiveKitUrl = (): string =>
+  cleanEnv(process.env.NEXT_PUBLIC_LIVEKIT_URL)
+
 export const isLiveKitConfigured = (): boolean =>
-  typeof window !== 'undefined' &&
-  !!process.env.NEXT_PUBLIC_LIVEKIT_URL
+  typeof window !== 'undefined' && getLiveKitUrl().startsWith('wss://')
 
 interface UseLiveKitOpts {
   /** Room code (URL identifier — used as LiveKit room name) */
@@ -191,7 +203,7 @@ export function useLiveKitRoom(opts: UseLiveKitOpts): LiveKitRoomState {
         const { token } = await res.json()
         if (cancelled) return
 
-        const url = process.env.NEXT_PUBLIC_LIVEKIT_URL!
+        const url = getLiveKitUrl()
         await lkRoom.connect(url, token, { autoSubscribe: true })
         if (cancelled) { lkRoom.disconnect(); return }
 

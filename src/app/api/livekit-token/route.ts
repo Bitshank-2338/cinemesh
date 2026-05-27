@@ -16,9 +16,17 @@ import { AccessToken } from 'livekit-server-sdk'
 
 export const runtime = 'nodejs'
 
+// Strip BOM / surrounding quotes / whitespace defensively. When env vars
+// are pushed via PowerShell pipelines, Vercel sometimes preserves wrapping
+// quotes that would invalidate the JWT signature otherwise.
+function clean(v: string | undefined): string {
+  if (!v) return ''
+  return v.replace(/^﻿/, '').replace(/^["']|["']$/g, '').trim()
+}
+
 export async function GET(req: NextRequest) {
-  const apiKey    = process.env.LIVEKIT_API_KEY
-  const apiSecret = process.env.LIVEKIT_API_SECRET
+  const apiKey    = clean(process.env.LIVEKIT_API_KEY)
+  const apiSecret = clean(process.env.LIVEKIT_API_SECRET)
 
   if (!apiKey || !apiSecret) {
     return NextResponse.json(
