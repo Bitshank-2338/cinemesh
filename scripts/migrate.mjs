@@ -1,7 +1,14 @@
 /**
  * CineMesh — Supabase migration runner
  * Uses the Supabase Management API to execute SQL directly.
- * Run with: node scripts/migrate.mjs
+ *
+ * Secrets are read from the environment — NEVER hardcode them here (this file
+ * is committed to a public repo). Set them inline for a one-off run:
+ *
+ *   SUPABASE_PROJECT_REF=xxxx SUPABASE_SERVICE_ROLE_KEY=eyJ... node scripts/migrate.mjs
+ *
+ * or export them / put them in an untracked .env.local and load before running.
+ * The service_role key bypasses RLS — treat it like a database password.
  */
 
 import { readFileSync } from 'fs'
@@ -10,8 +17,21 @@ import { dirname, join } from 'path'
 
 const __dir = dirname(fileURLToPath(import.meta.url))
 
-const PROJECT_REF    = 'rfbkstlbyvplnqciwujm'
-const SERVICE_ROLE   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJmYmtzdGxieXZwbG5xY2l3dWptIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODEzOTQ2NSwiZXhwIjoyMDkzNzE1NDY1fQ.lsmvML6fhoQMbhCQWuUVVusoOeirkA_IMWXvMxN-Cg4'
+const PROJECT_REF  = process.env.SUPABASE_PROJECT_REF
+const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+if (!PROJECT_REF || !SERVICE_ROLE) {
+  console.error(
+    '\n✗ Missing credentials.\n' +
+    '  Set SUPABASE_PROJECT_REF and SUPABASE_SERVICE_ROLE_KEY in your environment.\n' +
+    '  Example:\n' +
+    '    SUPABASE_PROJECT_REF=xxxx SUPABASE_SERVICE_ROLE_KEY=eyJ... node scripts/migrate.mjs\n' +
+    '\n  Prefer the manual path: paste scripts/cinemesh-migration.sql into the\n' +
+    '  Supabase SQL editor and click Run.\n',
+  )
+  process.exit(1)
+}
+
 const SUPABASE_URL   = `https://${PROJECT_REF}.supabase.co`
 const MGMT_API       = `https://api.supabase.com/v1/projects/${PROJECT_REF}/database/query`
 
@@ -143,7 +163,7 @@ function printManualInstructions() {
   console.log('━'.repeat(50))
   console.log('📋  MANUAL STEP REQUIRED (< 60 seconds)')
   console.log('━'.repeat(50))
-  console.log('\n1. Open: https://supabase.com/dashboard/project/rfbkstlbyvplnqciwujm/sql/new')
+  console.log(`\n1. Open: https://supabase.com/dashboard/project/${PROJECT_REF}/sql/new`)
   console.log('2. Paste the contents of:  scripts/cinemesh-migration.sql')
   console.log('3. Click "Run"\n')
   console.log('The file is at: scripts/cinemesh-migration.sql')
