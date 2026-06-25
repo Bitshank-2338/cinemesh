@@ -10,9 +10,14 @@ export type { RoomChannelAdapter, PresenceInfo, ChatPayload, SyncPayload, Signal
  * • If Supabase env vars are configured → SupabaseChannel (cross-device)
  * • Otherwise → LocalChannel (same-browser BroadcastChannel, zero-config)
  */
+function clean(v: string | undefined): string {
+  if (!v) return ''
+  return v.replace(/^﻿/, '').replace(/^["']|["']$/g, '').trim()
+}
+
 export function createChannel(roomId: string): RoomChannelAdapter {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const url = clean(process.env.NEXT_PUBLIC_SUPABASE_URL)
+  const key = clean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
 
   const configured =
     url && key &&
@@ -21,7 +26,7 @@ export function createChannel(roomId: string): RoomChannelAdapter {
     url.startsWith('https://')
 
   if (configured) {
-    return new SupabaseChannel(roomId, url!, key!)
+    return new SupabaseChannel(roomId, url, key)
   }
 
   return new LocalChannel(roomId)

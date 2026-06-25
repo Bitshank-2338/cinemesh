@@ -41,6 +41,7 @@ export class SupabaseChannel implements RoomChannelAdapter {
   private presence: Record<string, PresenceInfo> = {}
   private myInfo: PresenceInfo | null = null
   private _connected = false
+  private _cancelled = false
 
   constructor(
     private roomId: string,
@@ -51,6 +52,7 @@ export class SupabaseChannel implements RoomChannelAdapter {
   get isConnected() { return this._connected }
 
   async join(info: PresenceInfo): Promise<void> {
+    this._cancelled = false
     this.myInfo = info
     this.client = await getSupabase(this.supabaseUrl, this.supabaseKey)
     this.channel = this.client.channel(`room:${this.roomId}`, {
@@ -105,20 +107,28 @@ export class SupabaseChannel implements RoomChannelAdapter {
 
     // Subscribe and track presence
     await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this._cancelled) reject(new Error('Channel subscribe timed out'))
+      }, 15_000)
+
       this.channel!.subscribe(async (status) => {
+        // Ignore callbacks after leave() was called
+        if (this._cancelled) return
         if (status === 'SUBSCRIBED') {
+          clearTimeout(timer)
           await this.channel!.track(info)
           this._connected = true
           resolve()
-        } else if (status === 'CHANNEL_ERROR') {
-          reject(new Error('Supabase channel error'))
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          clearTimeout(timer)
+          reject(new Error(`Supabase channel ${status.toLowerCase()}`))
         }
       })
     })
   }
 
   leave(): void {
-    if (!this._connected) return
+    this._cancelled = true
     this._connected = false
     this.channel?.untrack()
     this.channel?.unsubscribe()
