@@ -17,6 +17,9 @@ export interface CreateRoomInput {
   name:        string
   hostId:      string
   maxMembers?: number
+  isPrivate?:  boolean
+  /** Plaintext password — hashed server-side, never stored or logged in clear. */
+  password?:   string
 }
 
 export type RoomServiceResult<T> =
@@ -46,6 +49,10 @@ interface QB {
 
 interface CinemeshDB {
   from(table: 'rooms' | 'participants'): QB
+  rpc(
+    fn: 'create_room' | 'verify_room_password' | 'delete_room',
+    args: Record<string, unknown>,
+  ): Promise<{ data: unknown; error: { message: string } | null }>
 }
 
 function db(): CinemeshDB {
@@ -54,42 +61,73 @@ function db(): CinemeshDB {
 
 // ─── Room operations ──────────────────────────────────────────────────────────
 
-/** Create a new room and return the full row. */
+/**
+ * Create a new room and return the full row.
+ *
+ * Creation goes through the cinemesh.create_room() SECURITY DEFINER
+ * function so the password is hashed (bcrypt) inside Postgres — the
+ * plaintext never touches the database and the resulting hash is never
+ * returned to the client.
+ */
 export async function createRoom(
   input: CreateRoomInput,
 ): Promise<RoomServiceResult<DbRoom>> {
+  const isPrivate = input.isPrivate ?? false
+  const hasPassword = isPrivate && !!input.password?.trim()
+
   if (!isSupabaseConfigured()) {
     const code = generateRoomCode()
     return {
       ok: true,
       data: {
-        id:          crypto.randomUUID(),
+        id:           crypto.randomUUID(),
         code,
-        name:        input.name,
-        host_id:     input.hostId,
-        is_active:   true,
-        max_members: input.maxMembers ?? 6,
-        created_at:  new Date().toISOString(),
-        expires_at:  new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+        name:         input.name,
+        host_id:      input.hostId,
+        is_active:    true,
+        is_private:   isPrivate,
+        has_password: hasPassword,
+        max_members:  input.maxMembers ?? 6,
+        created_at:   new Date().toISOString(),
+        expires_at:   new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
       },
     }
   }
 
-  const code = generateRoomCode()
-
-  const { data, error } = await db()
-    .from('rooms')
-    .insert({
-      code,
-      name:        input.name,
-      host_id:     input.hostId,
-      max_members: input.maxMembers ?? 6,
-    })
-    .select()
-    .single()
+  const { data, error } = await db().rpc('create_room', {
+    p_name:        input.name,
+    p_host_id:     input.hostId,
+    p_max_members: input.maxMembers ?? 6,
+    p_is_private:  isPrivate,
+    p_password:    hasPassword ? input.password!.trim() : null,
+  })
 
   if (error) return { ok: false, error: error.message }
-  return { ok: true, data: data as DbRoom }
+  // RETURNS TABLE → PostgREST returns an array of one row.
+  const row = (Array.isArray(data) ? data[0] : data) as DbRoom | undefined
+  if (!row) return { ok: false, error: 'Room creation returned no row.' }
+  return { ok: true, data: row }
+}
+
+/**
+ * Verify a join password against a private room. Returns true when the
+ * password matches (or the room has no password). The comparison happens
+ * entirely inside the verify_room_password() function — the stored hash
+ * is never sent to the client.
+ */
+export async function verifyRoomPassword(
+  code:     string,
+  password: string,
+): Promise<RoomServiceResult<boolean>> {
+  if (!isSupabaseConfigured()) return { ok: true, data: true }
+
+  const { data, error } = await db().rpc('verify_room_password', {
+    p_code:     code.toUpperCase(),
+    p_password: password,
+  })
+
+  if (error) return { ok: false, error: error.message }
+  return { ok: true, data: data === true }
 }
 
 /** Look up an active, non-expired room by its short code. */
@@ -102,7 +140,7 @@ export async function getRoomByCode(
 
   const { data, error } = await db()
     .from('rooms')
-    .select('*')
+    .select('id, code, name, host_id, is_active, is_private, has_password, max_members, created_at, expires_at')
     .eq('code', code.toUpperCase())
     .eq('is_active', true)
     .gt('expires_at', new Date().toISOString())
@@ -113,20 +151,21 @@ export async function getRoomByCode(
 }
 
 /**
- * Delete a room when the host leaves.
- * DELETE is used instead of UPDATE is_active=false because the SELECT RLS
- * policy requires is_active=true — PostgREST rejects updates that make a row
- * invisible to the updater. Cascades to participants via FK ON DELETE CASCADE.
+ * Delete a room when the host leaves. Routed through the host-checked
+ * delete_room() function: the delete only succeeds when the caller
+ * presents the host's secret participant_id (host_id). Cascades to
+ * participants via FK ON DELETE CASCADE.
  */
 export async function deactivateRoom(
   roomId: string,
+  hostId: string,
 ): Promise<RoomServiceResult<void>> {
   if (!isSupabaseConfigured()) return { ok: true, data: undefined }
 
-  const { error } = await db()
-    .from('rooms')
-    .delete()
-    .eq('id', roomId)
+  const { error } = await db().rpc('delete_room', {
+    p_room_id: roomId,
+    p_host_id: hostId,
+  })
 
   if (error) return { ok: false, error: error.message }
   return { ok: true, data: undefined }
